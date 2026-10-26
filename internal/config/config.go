@@ -27,6 +27,7 @@ type InitialConfig struct {
 	PingURL          string `yaml:"ping_url"`
 	PingAvg          int    `yaml:"ping_avg"`
 	PingTimeoutMS    int    `yaml:"ping_timeout_ms"`
+	PingGapMS        int    `yaml:"ping_gap_ms"` // pause between samples; 0 disables
 	Concurrency      int    `yaml:"concurrency"`
 	AliveThresholdMS int    `yaml:"alive_threshold_ms"`
 }
@@ -37,6 +38,7 @@ type DeepPingConfig struct {
 	Avg            int    `yaml:"avg"`
 	PingURL        string `yaml:"ping_url"`
 	TimeoutMS      int    `yaml:"timeout_ms"`
+	GapMS          int    `yaml:"gap_ms"` // pause between samples; 0 disables
 	FilterDeadDeep bool   `yaml:"filter_dead_deep"` // drop nodes whose deep ping latency is -1
 }
 
@@ -117,6 +119,7 @@ func defaults() *Config {
 			PingURL:          "https://www.gstatic.com/generate_204",
 			PingAvg:          3,
 			PingTimeoutMS:    3000,
+			PingGapMS:        1000,
 			Concurrency:      50,
 			AliveThresholdMS: 3000,
 		},
@@ -126,6 +129,7 @@ func defaults() *Config {
 				Avg:         7,
 				PingURL:     "https://www.gstatic.com/generate_204",
 				TimeoutMS:   3000,
+				GapMS:       1000,
 			},
 			Geo: GeoConfig{
 				Concurrency:     20,
@@ -205,6 +209,7 @@ func applyEnv(cfg *Config) {
 	envStr("INITIAL_PING_URL", &cfg.Initial.PingURL)
 	envInt("INITIAL_PING_AVG", &cfg.Initial.PingAvg)
 	envInt("INITIAL_PING_TIMEOUT_MS", &cfg.Initial.PingTimeoutMS)
+	envInt("INITIAL_PING_GAP_MS", &cfg.Initial.PingGapMS)
 	envInt("INITIAL_CONCURRENCY", &cfg.Initial.Concurrency)
 	envInt("INITIAL_ALIVE_THRESHOLD_MS", &cfg.Initial.AliveThresholdMS)
 
@@ -213,6 +218,7 @@ func applyEnv(cfg *Config) {
 	envInt("DEEP_PING_AVG", &cfg.Deep.Ping.Avg)
 	envStr("DEEP_PING_URL", &cfg.Deep.Ping.PingURL)
 	envInt("DEEP_PING_TIMEOUT_MS", &cfg.Deep.Ping.TimeoutMS)
+	envInt("DEEP_PING_GAP_MS", &cfg.Deep.Ping.GapMS)
 	envBool("DEEP_PING_FILTER_DEAD", &cfg.Deep.Ping.FilterDeadDeep)
 
 	// Deep geo

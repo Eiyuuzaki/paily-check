@@ -28,6 +28,15 @@ type PingConfig struct {
 	URL       string
 	Avg       int
 	TimeoutMS int
+	// SampleGapMS is the pause between consecutive samples. 0 disables it.
+	//
+	// The gap exists to avoid a thundering herd of probes hitting the line
+	// at once, but it is pure dead time: with the concurrency semaphore
+	// already capping in-flight probes, sleeping between samples only
+	// stretches each node's wall time and (because the sleep happens while
+	// the semaphore slot is held in initial.RunAll) starves other nodes.
+	// Set 0 on degraded links where probe latency dominates.
+	SampleGapMS int
 }
 
 // PingResult is the outcome of Ping().
@@ -67,7 +76,15 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 			samples[i] = int(httpDelay)
 			successCount++
 		}
-		time.Sleep(1 * time.Second)
+		// Pause between samples (not after the last one). Configurable:
+		// 0 disables the gap entirely — see PingConfig.SampleGapMS.
+		if cfg.SampleGapMS > 0 && i < n-1 {
+			select {
+			case <-ctx.Done():
+				return PingResult{LatencyMS: -1, JitterMS: -1}
+			case <-time.After(time.Duration(cfg.SampleGapMS) * time.Millisecond):
+			}
+		}
 	}
 
 	if successCount == 0 {

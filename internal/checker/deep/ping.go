@@ -20,9 +20,10 @@ func RunPing(ctx context.Context, nodes []client.Node, vendorBase interfaces.Ven
 		defer tracker.Inc()
 		v := vendorBase.Build(node.Raw)
 		return pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-			URL:       cfg.PingURL,
-			Avg:       cfg.Avg,
-			TimeoutMS: cfg.TimeoutMS,
+			URL:         cfg.PingURL,
+			Avg:         cfg.Avg,
+			TimeoutMS:   cfg.TimeoutMS,
+			SampleGapMS: cfg.GapMS,
 		})
 	})
 }

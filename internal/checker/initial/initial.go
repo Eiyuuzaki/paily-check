@@ -50,9 +50,10 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 
 			v := vendorBase.Build(node.Raw)
 			pr := pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-				URL:       cfg.PingURL,
-				Avg:       cfg.PingAvg,
-				TimeoutMS: cfg.PingTimeoutMS,
+				URL:         cfg.PingURL,
+				Avg:         cfg.PingAvg,
+				TimeoutMS:   cfg.PingTimeoutMS,
+				SampleGapMS: cfg.PingGapMS,
 			})
 
 			results[i] = client.CheckResult{
