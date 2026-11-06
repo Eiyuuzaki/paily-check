@@ -65,6 +65,11 @@ func (v *ClashVendor) Build(raw map[string]interface{}) interfaces.Vendor {
 		n.proxyType, _ = val.(string)
 	}
 
+	// node.Raw arrives via JSON unmarshal, so every number is float64.
+	// mihomo's wireguard parser rejects a float64 port, which would make Build
+	// return NotReady and the node report -1 forever. Normalise first.
+	normaliseNumbers(raw)
+
 	proxy, err := adapter.ParseProxy(raw)
 	if err != nil {
 		// Return a vendor in NotReady state so callers skip this node.
@@ -193,4 +198,14 @@ func capitalize(s string) string {
 		runes[i] = unicode.ToLower(runes[i])
 	}
 	return string(runes)
+}
+
+// normaliseNumbers rewrites float64 values that are whole numbers back to int,
+// so adapters expecting integer fields (port, mtu, …) accept JSON-decoded maps.
+func normaliseNumbers(raw map[string]interface{}) {
+	for k, v := range raw {
+		if f, ok := v.(float64); ok && f == float64(int(f)) {
+			raw[k] = int(f)
+		}
+	}
 }

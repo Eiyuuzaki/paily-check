@@ -46,6 +46,11 @@ func Parse(proxyType string) ProxyType {
 		proxyType = string(Shadowsocks)
 	case "ssr":
 		proxyType = string(ShadowsocksR)
+	case "WireGuard":
+		// mihomo spells this "WireGuard"; the enum constant is "Wireguard".
+		// Without this mapping Build() treats every wireguard node as Invalid
+		// and returns NotReady, so such nodes report latency -1 forever.
+		proxyType = string(Wireguard)
 	}
 	pt := ProxyType(proxyType)
 	if Valid(pt) {
