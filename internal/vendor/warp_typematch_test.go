@@ -11,8 +11,8 @@ func TestWireGuardTypeStringMismatch(t *testing.T) {
 	raw := map[string]interface{}{
 		"name": "WARP-CF", "type": "wireguard",
 		"server": "engage.cloudflareclient.com", "port": 2408,
-		"private-key": "mMIRlhogeiT4+GvRgxDO0U8EMMlQQjrMOri8CBoYNWI=",
-		"public-key":  "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+		"private-key": "nHBVqHeEZNF3fliFS2y4mq3zb6djUFxxfP2Zsd8eSzk=",
+		"public-key":  "eYHK3wifnrFz0Q2JaoCHQiWAo/4wqF0IQCZZ/GqjBng=",
 		"ip": "172.16.0.2", "mtu": 1280,
 		"allowed-ips": []interface{}{"0.0.0.0/0", "::/0"},
 	}
