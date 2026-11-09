@@ -101,6 +101,7 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 				// output and skip all remaining deep phases.
 				if r, ok := resultByID[node.ID]; ok {
 					r.Initial.LatencyMS = -1
+					r.Initial.FailReason = "deep_timeout"
 				}
 				filtered++
 			} else {

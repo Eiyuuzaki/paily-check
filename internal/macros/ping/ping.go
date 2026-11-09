@@ -43,6 +43,9 @@ type PingConfig struct {
 type PingResult struct {
 	LatencyMS int // -1 = all attempts timed out
 	JitterMS  int // population stddev over N samples (0 for initial pass if not needed)
+	// FailReason classifies why the node failed (empty when alive). Values:
+	// timeout / conn_refused / dns / tls_handshake / dial_failed / conn_reset / other.
+	FailReason string
 }
 
 // Ping performs up to cfg.Avg attempts against cfg.URL through vendor v.
@@ -67,11 +70,13 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 
 	samples := make([]int, n) // filled with T or actual rtt
 	successCount := 0
+	lastFailReason := ""
 
 	for i := 0; i < n; i++ {
 		httpDelay, err := singlePing(ctx, v, cfg.URL, time.Duration(t)*time.Millisecond)
 		if err != nil {
 			samples[i] = t
+			lastFailReason = classifyPingError(err)
 		} else {
 			samples[i] = int(httpDelay)
 			successCount++
@@ -81,14 +86,17 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		if cfg.SampleGapMS > 0 && i < n-1 {
 			select {
 			case <-ctx.Done():
-				return PingResult{LatencyMS: -1, JitterMS: -1}
+				return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: "aborted"}
 			case <-time.After(time.Duration(cfg.SampleGapMS) * time.Millisecond):
 			}
 		}
 	}
 
 	if successCount == 0 {
-		return PingResult{LatencyMS: -1, JitterMS: -1}
+		if lastFailReason == "" {
+			lastFailReason = "timeout"
+		}
+		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason}
 	}
 
 	// average = (Σ samples) / N
@@ -114,6 +122,35 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 // ---------------------------------------------------------------------------
 // Low-level: single attempt
 // ---------------------------------------------------------------------------
+
+// classifyPingError maps a ping failure to a coarse reason code so operators
+// can tell "died of TLS block" from "died of timeout" from "connection refused".
+func classifyPingError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "timeout"
+	}
+	s := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(s, "refused"):
+		return "conn_refused"
+	case strings.Contains(s, "no such host") || strings.Contains(s, "server misbehaving") || strings.Contains(s, "dns"):
+		return "dns"
+	case strings.Contains(s, "tls") || strings.Contains(s, "certificate") || strings.Contains(s, "handshake"):
+		return "tls_handshake"
+	case strings.Contains(s, "timeout") || strings.Contains(s, "deadline exceeded"):
+		return "timeout"
+	case strings.Contains(s, "reset") || strings.Contains(s, "eof") || strings.Contains(s, "closed"):
+		return "conn_reset"
+	case strings.Contains(s, "dial"):
+		return "dial_failed"
+	default:
+		return "other"
+	}
+}
 
 func singlePing(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (httpDelay int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)

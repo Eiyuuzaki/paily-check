@@ -42,7 +42,7 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 			if err := sem.Acquire(ctx, 1); err != nil {
 				results[i] = client.CheckResult{
 					NodeID:  node.ID,
-					Initial: client.InitialResult{LatencyMS: -1},
+					Initial: client.InitialResult{LatencyMS: -1, FailReason: "semaphore_timeout"},
 				}
 				return
 			}
@@ -58,7 +58,7 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 
 			results[i] = client.CheckResult{
 				NodeID:  node.ID,
-				Initial: client.InitialResult{LatencyMS: pr.LatencyMS},
+				Initial: client.InitialResult{LatencyMS: pr.LatencyMS, FailReason: pr.FailReason},
 			}
 		}()
 	}

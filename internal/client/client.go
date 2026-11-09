@@ -29,7 +29,8 @@ type Node struct {
 // InitialResult carries the outcome of the initial latency check.
 // LatencyMS == -1 means every ping attempt timed out.
 type InitialResult struct {
-	LatencyMS int `json:"latency_ms"`
+	LatencyMS  int    `json:"latency_ms"`
+	FailReason string `json:"fail_reason,omitempty"`
 }
 
 // DeepResult carries the outcome of the detailed checks.
