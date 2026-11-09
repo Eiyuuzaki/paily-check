@@ -77,6 +77,14 @@ func main() {
 		}
 		defer running.Store(0)
 
+		// Sentinel: skip the whole cycle when local network is down,
+		// so a router outage cannot produce bogus timeouts that kill alive nodes.
+		checker.ResetSentinel()
+		if err := checker.CheckSentinel(); err != nil {
+			log.Printf("checker: sentinel says local network down, skipping cycle: %v", err)
+			return true
+		}
+
 		var nodes []client.Node
 		var err error
 		for attempt := 0; attempt <= getNodesRetryCount; attempt++ {
@@ -98,6 +106,13 @@ func main() {
 		log.Printf("checker: starting pipeline for %d nodes", len(nodes))
 
 		results := checker.Run(context.Background(), nodes, v, cfg)
+
+		// Sentinel re-check before posting: an outage that started mid-cycle
+		// poisons every result collected after it - discard instead of posting.
+		if err := checker.DiscardSentinel(); err != nil {
+			log.Printf("checker: sentinel failed after pipeline, discarding %d results: %v", len(results), err)
+			return true
+		}
 
 		for attempt := 0; attempt <= postResultsRetryCount; attempt++ {
 			err = cl.PostResults(results)
