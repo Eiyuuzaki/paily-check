@@ -166,6 +166,14 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 		if pr, ok := pingResults[node.ID]; ok {
 			dr.AvgLatencyMS = pr.LatencyMS
 			dr.JitterMS = pr.JitterMS
+			// Reliability metadata: separates success-rate from timeout-penalized
+			// average so scoring can rank dual-peak nodes fairly.
+			pm := map[string]any{
+				"ping_success":     pr.Success,
+				"ping_total":       pr.Total,
+				"ping_avg_success": pr.AvgSuccessMS,
+			}
+			dr.Metadata = pm
 		}
 
 		if region, ok := geoResults[node.ID]; ok {

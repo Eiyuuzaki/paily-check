@@ -43,6 +43,12 @@ type PingConfig struct {
 type PingResult struct {
 	LatencyMS int // -1 = all attempts timed out
 	JitterMS  int // population stddev over N samples (0 for initial pass if not needed)
+	// Success/Total expose per-node ping reliability so downstream can
+	// separate "avg includes timeout penalties" from "avg of live samples".
+	Success int
+	Total   int
+	// AvgSuccessMS is the mean over successful attempts only (0 when none).
+	AvgSuccessMS int
 	// FailReason classifies why the node failed (empty when alive). Values:
 	// timeout / conn_refused / dns / tls_handshake / dial_failed / conn_reset / other.
 	FailReason string
@@ -86,7 +92,7 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		if cfg.SampleGapMS > 0 && i < n-1 {
 			select {
 			case <-ctx.Done():
-				return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: "aborted"}
+				return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: "aborted", Success: successCount, Total: n}
 			case <-time.After(time.Duration(cfg.SampleGapMS) * time.Millisecond):
 			}
 		}
@@ -96,7 +102,7 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		if lastFailReason == "" {
 			lastFailReason = "timeout"
 		}
-		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason}
+		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason, Success: 0, Total: n}
 	}
 
 	// average = (Σ samples) / N
@@ -116,7 +122,18 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	variance /= float64(n)
 	jitter := int(math.Round(math.Sqrt(variance)))
 
-	return PingResult{LatencyMS: avg, JitterMS: jitter}
+		// Mean over successful samples only (raw live-path latency, no timeout penalty).
+	sumOK := 0
+	for _, s := range samples {
+		if s < t {
+			sumOK += s
+		}
+	}
+	avgOK := 0
+	if successCount > 0 {
+		avgOK = sumOK / successCount
+	}
+	return PingResult{LatencyMS: avg, JitterMS: jitter, Success: successCount, Total: n, AvgSuccessMS: avgOK}
 }
 
 // ---------------------------------------------------------------------------
