@@ -132,7 +132,34 @@ func (c *Client) GetNodes() ([]Node, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("client: decode nodes: %w", err)
 	}
+	for i := range out.Nodes {
+		injectECH(out.Nodes[i].Raw)
+	}
 	return out.Nodes, nil
+}
+
+// injectECH adds mihomo ech-opts to TLS proxies so the checker probe path
+// exercises the same encrypted SNI the distributed config uses. Since GFW
+// started keeping per-domain SNI blocklists (AGENTS.md 2026-11-11), a probe
+// without ECH RSTs on domains the user-facing config happily connects to,
+// which marks live nodes dead and keeps them out of distribution forever.
+// REALITY is excluded: it needs the plaintext SNI to impersonate a real site,
+// and mihomo rejects the combination ("Reality is conflict with ECH").
+// Nodes may already carry ech-opts from their own raw payload - keep those.
+func injectECH(raw map[string]interface{}) {
+	if raw == nil {
+		return
+	}
+	if tls, ok := raw["tls"].(bool); !ok || !tls {
+		return
+	}
+	if _, isReality := raw["reality-opts"]; isReality {
+		return
+	}
+	if _, has := raw["ech-opts"]; has {
+		return
+	}
+	raw["ech-opts"] = map[string]interface{}{"enable": true}
 }
 
 // PostResults uploads all check results to paily-core.
