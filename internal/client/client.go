@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
+
+	"github.com/openpaily/paily-check/internal/vendor"
 )
 
 const apiBodyTimeout = 7 * time.Minute
@@ -146,6 +149,17 @@ func (c *Client) GetNodes() ([]Node, error) {
 // REALITY is excluded: it needs the plaintext SNI to impersonate a real site,
 // and mihomo rejects the combination ("Reality is conflict with ECH").
 // Nodes may already carry ech-opts from their own raw payload - keep those.
+//
+// 2026-11-12: only inject when the server domain actually advertises an ech=
+// value in its DNS HTTPS (type65) record. mihomo v1.19.33 treats
+// ech-opts{enable:true} against a domain without one as a hard dial failure
+// ("resolve ECH config error: no ECH config found in DNS records") - it does
+// NOT fall back to plaintext. Blind injection marked every healthy non-CF
+// node (hidenplay.net etc.) dead with a misleading "dns" fail_reason and
+// kept our own self-built exits out of distribution (AGENTS.md 2026-11-12).
+// The record lookup goes through the same Ali DoH resolver mihomo uses and
+// is negative-cached, so the per-cycle cost is one query per distinct
+// non-ECH domain.
 func injectECH(raw map[string]interface{}) {
 	if raw == nil {
 		return
@@ -157,6 +171,20 @@ func injectECH(raw map[string]interface{}) {
 		return
 	}
 	if _, has := raw["ech-opts"]; has {
+		return
+	}
+	host, _ := raw["servername"].(string)
+	if host == "" {
+		host, _ = raw["server"].(string)
+	}
+	if host == "" || net.ParseIP(host) != nil {
+		// IP-literal server: no DNS record to consult; mihomo would fail the
+		// same way, so keep plaintext TLS (ECH never applies to bare IPs).
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if !vendor.HasECHRecord(ctx, host) {
 		return
 	}
 	raw["ech-opts"] = map[string]interface{}{"enable": true}

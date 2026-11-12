@@ -126,6 +126,34 @@ func (d *dohResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr
 func (d *dohResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
 	return d.lookupIPs(ctx, host, true)
 }
+// HasECHRecord reports whether the host's HTTPS (type 65) DNS record carries
+// an ech= value. The checker's ECH injector uses it to decide whether adding
+// ech-opts would help (record present) or kill the dial entirely (mihomo
+// fails hard with "resolve ECH config error" when the record is missing -
+// it does NOT fall back to plaintext). Self-hosted domains outside Cloudflare
+// (e.g. hidenplay.net) have no type65 record, so their nodes must be probed
+// without ech-opts. Result is cached with the same TTL as echCache to keep
+// the per-cycle DNS cost negligible.
+func (d *dohResolver) HasECHRecord(ctx context.Context, host string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if e, ok := d.echCache[host]; ok && time.Since(e.fetchedAt) < echCacheTTL {
+		return len(e.data) > 0
+	}
+	answers := d.dnsQuery(ctx, host, 65)
+	for _, a := range answers {
+		data, _ := a["data"].(string)
+		if strings.Contains(data, "ech=\"") {
+			// store an empty entry only when the record truly lacks ech=;
+			// when present, leave caching to ResolveECH's full parse
+			return true
+		}
+	}
+	// negative cache: remember "no ech" so every cycle doesn't re-query
+	d.echCache[host] = echCacheEntry{data: nil, fetchedAt: time.Now()}
+	return false
+}
+
 // ResolveECH extracts the ech= base64 value from the HTTPS (type 65) record.
 // mihomo calls this before every ECH handshake.
 func (d *dohResolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
