@@ -102,6 +102,25 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		if lastFailReason == "" {
 			lastFailReason = "timeout"
 		}
+		// Slow-node rescue: a host that is merely slow must not be classified
+		// dead. Free hosts like HidenCloud sit at 3-4s on the live path, so a
+		// single network hiccup pushes every sample past the normal budget and
+		// the node flips alive<->dead forever (2026-11-13: app2301.hidenplay.net
+		// answered 200 in 2.5s by hand while the checker recorded timeout).
+		// Only timeouts qualify — a refused/reset/dns failure will not become a
+		// success just because we wait longer, so skipping the retry keeps dead
+		// nodes cheap.
+		if lastFailReason == "timeout" {
+			if r, ok := slowRetry(ctx, v, cfg.URL, time.Duration(t*2)*time.Millisecond); ok {
+				return PingResult{
+					LatencyMS:    int(r),
+					JitterMS:     0,
+					Success:      1,
+					Total:        n,
+					AvgSuccessMS: int(r),
+				}
+			}
+		}
 		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason, Success: 0, Total: n}
 	}
 
@@ -167,6 +186,23 @@ func classifyPingError(err error) string {
 	default:
 		return "other"
 	}
+}
+
+// slowRetry gives an already-failing measurement one more chance with a
+// doubled budget. Returns the observed delay when the node answers, and
+// ok=false when it still does not (a genuine dead node costs one extra
+// attempt, not the whole retry matrix).
+func slowRetry(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (int64, bool) {
+	select {
+	case <-ctx.Done():
+		return 0, false
+	default:
+	}
+	httpDelay, err := singlePing(ctx, v, rawURL, timeout)
+	if err != nil {
+		return 0, false
+	}
+	return httpDelay, true
 }
 
 func singlePing(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (httpDelay int64, err error) {
