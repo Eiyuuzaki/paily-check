@@ -135,8 +135,14 @@ func (c *Client) GetNodes() ([]Node, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("client: decode nodes: %w", err)
 	}
+	// ECH injection is intentionally disabled here (2026-11-15 A/B probe):
+	// same node, same minute — plaintext SNI handshake succeeded (2988ms) while
+	// the ech-opts variant died with tls_handshake. Probing is about whether the
+	// NODE is alive, not whether the user client's full ECH chain works; the
+	// distribution generators still inject ech-opts for clients. Re-enable only
+	// after ECH handshakes through these entry IPs are verified stable again.
 	for i := range out.Nodes {
-		injectECH(out.Nodes[i].Raw)
+		_ = out.Nodes[i]
 	}
 	return out.Nodes, nil
 }
@@ -160,6 +166,10 @@ func (c *Client) GetNodes() ([]Node, error) {
 // The record lookup goes through the same Ali DoH resolver mihomo uses and
 // is negative-cached, so the per-cycle cost is one query per distinct
 // non-ECH domain.
+// InjectECHForTest exposes the injector to diagnostic commands.
+func InjectECHForTest(raw map[string]interface{}) { injectECH(raw) }
+
+// Deprecated: kept for the test hook only; not called from GetNodes.
 func injectECH(raw map[string]interface{}) {
 	if raw == nil {
 		return
