@@ -5,6 +5,7 @@ package deep
 import (
 	"context"
 
+	"github.com/openpaily/paily-check/internal/checker/probeurl"
 	"github.com/openpaily/paily-check/internal/checker/progress"
 	"github.com/openpaily/paily-check/internal/checker/worker"
 	"github.com/openpaily/paily-check/internal/client"
@@ -20,7 +21,7 @@ func RunPing(ctx context.Context, nodes []client.Node, vendorBase interfaces.Ven
 		defer tracker.Inc()
 		v := vendorBase.Build(node.Raw)
 		return pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-			URL:         cfg.PingURL,
+			URL:         probeurl.For(node, cfg.PingURL),
 			Avg:         cfg.Avg,
 			TimeoutMS:   cfg.TimeoutMS,
 			SampleGapMS: cfg.GapMS,

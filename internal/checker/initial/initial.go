@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/sync/semaphore"
 
+	"github.com/openpaily/paily-check/internal/checker/probeurl"
 	"github.com/openpaily/paily-check/internal/checker/progress"
 	"github.com/openpaily/paily-check/internal/client"
 	"github.com/openpaily/paily-check/internal/config"
@@ -50,7 +51,7 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 
 			v := vendorBase.Build(node.Raw)
 			pr := pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-				URL:         cfg.PingURL,
+				URL:         probeurl.For(node, cfg.PingURL),
 				Avg:         cfg.PingAvg,
 				TimeoutMS:   cfg.PingTimeoutMS,
 				SampleGapMS: cfg.PingGapMS,
