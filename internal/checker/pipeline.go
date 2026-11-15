@@ -121,13 +121,17 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	t0 = time.Now()
 	tracker.Start("Geo Detection", alive)
 	geoResults := deep.RunGeo(ctx, aliveNodes, v, &cfg.Deep.Geo, tracker)
+	geoRegions := make(map[string]string, len(geoResults))
+	for nodeID, result := range geoResults {
+		geoRegions[nodeID] = result.Region
+	}
 	tracker.Done()
 	logMetrics("Geo detection", fmt.Sprintf("total=%d", alive), time.Since(t0), alive)
 
 	// ------------------------------------------------------------------
 	// Third-party scripts
 	// ------------------------------------------------------------------
-	scriptNodes := filterScriptNodesByRegion(aliveNodes, geoResults, cfg.Deep.Script.Regions)
+	scriptNodes := filterScriptNodesByRegion(aliveNodes, geoRegions, cfg.Deep.Script.Regions)
 	if len(scriptNodes) != len(aliveNodes) {
 		log.Printf("[pipeline] script region filter: kept %d/%d node(s) for regions=%v", len(scriptNodes), len(aliveNodes), cfg.Deep.Script.Regions)
 	}
@@ -176,8 +180,9 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 			dr.Metadata = pm
 		}
 
-		if region, ok := geoResults[node.ID]; ok {
-			dr.Region = region
+		if geo, ok := geoResults[node.ID]; ok {
+			dr.Region = geo.Region
+			dr.RegionSource = geo.Source
 		}
 
 		if sr, ok := scriptResults[node.ID]; ok {

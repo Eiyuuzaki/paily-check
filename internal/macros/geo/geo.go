@@ -23,6 +23,12 @@ type GeoConfig struct {
 	NativeAPI       GeoNativeAPIConfig // native concurrent Geo API mode
 }
 
+// GeoResult keeps the country label separate from the evidence that produced it.
+type GeoResult struct {
+	Region string
+	Source string
+}
+
 // Detect resolves the exit country code for the given vendor proxy.
 // Returns an ISO 3166-1 alpha-2 upper-case code (e.g. "HK", "US") or ""
 // when detection fails.
@@ -45,6 +51,36 @@ func Detect(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
 		return ""
 	}
 	return fallbackNodeAddressMMDB(ctx, v, cfg.MmdbPath)
+}
+
+// DetectWithSource returns the detected region and the method that produced it.
+// Inbound MMDB fallback is kept distinct because it describes the entry, not egress.
+func DetectWithSource(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) GeoResult {
+	if strings.EqualFold(cfg.Mode, "native_api") {
+		if detected := detectNative(ctx, v, cfg); detected != "" {
+			return GeoResult{Region: detected, Source: "native_egress"}
+		}
+		if !cfg.FallbackLegacy {
+			if cfg.FallbackInbound {
+				return inboundFallback(ctx, v, cfg.MmdbPath)
+			}
+			return GeoResult{}
+		}
+	}
+	if detected := detectLegacy(v, cfg); detected != "" {
+		return GeoResult{Region: detected, Source: "legacy_egress"}
+	}
+	if !cfg.FallbackInbound {
+		return GeoResult{}
+	}
+	return inboundFallback(ctx, v, cfg.MmdbPath)
+}
+
+func inboundFallback(ctx context.Context, v interfaces.Vendor, path string) GeoResult {
+	if region := fallbackNodeAddressMMDB(ctx, v, path); region != "" {
+		return GeoResult{Region: region, Source: "inbound_mmdb"}
+	}
+	return GeoResult{}
 }
 
 func detectNative(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {

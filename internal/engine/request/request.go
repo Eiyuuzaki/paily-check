@@ -144,6 +144,16 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 		return nil, err
 	}
 	defer conn.Close()
+	// Context cancellation alone does not interrupt an established net.Conn.
+	// Apply it to the socket so silent peers cannot pin a Checker goroutine.
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	if _, err := conn.Write(data); err != nil {
 		return nil, err

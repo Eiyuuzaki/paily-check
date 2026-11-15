@@ -44,6 +44,7 @@ type DeepResult struct {
 	JitterMS     int             `json:"jitter_ms"`
 	SpeedKbps    *int            `json:"speed_kbps,omitempty"`
 	Region       string          `json:"region,omitempty"`
+	RegionSource string          `json:"region_source,omitempty"`
 	Streaming    map[string]bool `json:"streaming,omitempty"`
 	Metadata     map[string]any  `json:"metadata,omitempty"`
 }
