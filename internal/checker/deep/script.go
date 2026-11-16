@@ -36,7 +36,7 @@ func RunScript(
 
 	return worker.RunNodes(ctx, nodes, cfg.NodeConcurrency, func(ctx context.Context, node client.Node) map[string]bool {
 		defer tracker.Inc()
-		v := vendorBase.Build(node.Raw)
+		v := vendorBase.Build(node.DialRaw())
 		return scriptMacro.RunAllWithEngine(ctx, v, scripts, globalSem, cfg.Engine)
 	})
 }

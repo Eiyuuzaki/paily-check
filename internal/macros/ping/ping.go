@@ -26,6 +26,9 @@ import (
 // PingConfig carries parameters for a single ping run.
 type PingConfig struct {
 	URL       string
+	// URLs is an ordered list of probe targets; the first that answers wins.
+	// When empty, URL is used. See probeurl.Targets.
+	URLs      []string
 	Avg       int
 	TimeoutMS int
 	// SampleGapMS is the pause between consecutive samples. 0 disables it.
@@ -73,13 +76,17 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	if t <= 0 {
 		t = 3000
 	}
+	candidates := cfg.URLs
+	if len(candidates) == 0 {
+		candidates = []string{cfg.URL}
+	}
 
 	samples := make([]int, n) // filled with T or actual rtt
 	successCount := 0
 	lastFailReason := ""
 
 	for i := 0; i < n; i++ {
-		httpDelay, err := singlePing(ctx, v, cfg.URL, time.Duration(t)*time.Millisecond)
+		httpDelay, err := probeAny(ctx, v, candidates, time.Duration(t)*time.Millisecond)
 		if err != nil {
 			samples[i] = t
 			lastFailReason = classifyPingError(err)
@@ -111,7 +118,7 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		// success just because we wait longer, so skipping the retry keeps dead
 		// nodes cheap.
 		if lastFailReason == "timeout" {
-			if r, ok := slowRetry(ctx, v, cfg.URL, time.Duration(t*2)*time.Millisecond); ok {
+			if r, ok := slowRetry(ctx, v, candidates, time.Duration(t*2)*time.Millisecond); ok {
 				return PingResult{
 					LatencyMS:    int(r),
 					JitterMS:     0,
@@ -192,13 +199,31 @@ func classifyPingError(err error) string {
 // doubled budget. Returns the observed delay when the node answers, and
 // ok=false when it still does not (a genuine dead node costs one extra
 // attempt, not the whole retry matrix).
-func slowRetry(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (int64, bool) {
+// probeAny tries each target in order and returns the first successful RTT.
+// A target that fails (timeout / TLS / reset) falls through to the next one, so
+// a single blocked target does not mark the node dead.
+func probeAny(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration) (int64, error) {
+	var lastErr error
+	for _, u := range urls {
+		d, err := singlePing(ctx, v, u, timeout)
+		if err == nil {
+			return d, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("ping: no targets")
+	}
+	return 0, lastErr
+}
+
+func slowRetry(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration) (int64, bool) {
 	select {
 	case <-ctx.Done():
 		return 0, false
 	default:
 	}
-	httpDelay, err := singlePing(ctx, v, rawURL, timeout)
+	httpDelay, err := probeAny(ctx, v, urls, timeout)
 	if err != nil {
 		return 0, false
 	}

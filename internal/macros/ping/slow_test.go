@@ -29,7 +29,7 @@ func TestSlowRetryHonoursCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	start := time.Now()
-	if _, ok := slowRetry(ctx, nil, "https://example.com", 5*time.Second); ok {
+	if _, ok := slowRetry(ctx, nil, []string{"https://example.com"}, 5*time.Second); ok {
 		t.Fatal("slowRetry reported success with a cancelled context")
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {

@@ -19,9 +19,9 @@ import (
 func RunPing(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vendor, cfg *config.DeepPingConfig, tracker *progress.Tracker) map[string]pingMacro.PingResult {
 	return worker.RunNodes(ctx, nodes, cfg.Concurrency, func(ctx context.Context, node client.Node) pingMacro.PingResult {
 		defer tracker.Inc()
-		v := vendorBase.Build(node.Raw)
+		v := vendorBase.Build(node.DialRaw())
 		return pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-			URL:         probeurl.For(node, cfg.PingURL),
+			URLs:        probeurl.Targets(node, cfg.PingURL),
 			Avg:         cfg.Avg,
 			TimeoutMS:   cfg.TimeoutMS,
 			SampleGapMS: cfg.GapMS,

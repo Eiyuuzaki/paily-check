@@ -16,7 +16,7 @@ import (
 func RunGeo(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vendor, cfg *config.GeoConfig, tracker *progress.Tracker) map[string]geoMacro.GeoResult {
 	return worker.RunNodes(ctx, nodes, cfg.Concurrency, func(ctx context.Context, node client.Node) geoMacro.GeoResult {
 		defer tracker.Inc()
-		v := vendorBase.Build(node.Raw)
+		v := vendorBase.Build(node.DialRaw())
 		return geoMacro.DetectWithSource(ctx, v, geoMacro.GeoConfig{
 			Mode:            cfg.Mode,
 			MmdbPath:        cfg.MmdbPath,

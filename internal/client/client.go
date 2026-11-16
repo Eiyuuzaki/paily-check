@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/openpaily/paily-check/internal/vendor"
@@ -235,4 +236,38 @@ func (c *Client) PostResults(results []CheckResult) error {
 		return fmt.Errorf("client: POST /api/v1/check/results status %d: %s", resp.StatusCode, body2)
 	}
 	return nil
+}
+
+// DialRaw returns the raw proxy map to dial for probing.
+//
+// When a node's raw server is an IPv6 literal but the node also carries an
+// IPv4 literal in its Server field (the address actually distributed to
+// clients), prefer the IPv4 address. This keeps probing aligned with what
+// users connect to and stops CF-anycast nodes from being marked dead just
+// because their IPv6 entry is unreachable from this line (2026-11-17).
+// The original raw map is never mutated.
+func (n Node) DialRaw() map[string]interface{} {
+	raw := n.Raw
+	if raw == nil {
+		return raw
+	}
+	rs, _ := raw["server"].(string)
+	if !isIPv6Literal(rs) {
+		return raw
+	}
+	ip := net.ParseIP(strings.TrimSpace(n.Server))
+	if ip == nil || ip.To4() == nil {
+		return raw
+	}
+	cp := make(map[string]interface{}, len(raw)+1)
+	for k, v := range raw {
+		cp[k] = v
+	}
+	cp["server"] = n.Server
+	return cp
+}
+
+func isIPv6Literal(s string) bool {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	return ip != nil && ip.To4() == nil && ip.To16() != nil
 }

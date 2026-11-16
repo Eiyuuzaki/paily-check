@@ -84,3 +84,24 @@ func For(node client.Node, fallback string) string {
 	}
 	return fallback
 }
+
+// AppleCaptive is Apple's captive-portal probe. It is globally anycast, very
+// stable from mainland China and not a censorship target, so it is a good
+// neutral secondary when Cloudflare or Google is degraded.
+const AppleCaptive = "https://captive.apple.com/hotspot-detect.html"
+
+// Targets returns the ordered probe targets for a node. CF-hosted nodes only
+// need to reach the Cloudflare edge, so a single CF target suffices. Other
+// nodes try CF first (anycast, stable at night) then Apple then the configured
+// fallback (gstatic), so a single degraded target is not recorded as a dead
+// node. The first target that answers wins (2026-11-17).
+func Targets(node client.Node, fallback string) []string {
+	if IsCloudflare(node) {
+		return []string{CFGenerate204}
+	}
+	out := []string{CFGenerate204, AppleCaptive}
+	if fallback != "" && fallback != CFGenerate204 && fallback != AppleCaptive {
+		out = append(out, fallback)
+	}
+	return out
+}

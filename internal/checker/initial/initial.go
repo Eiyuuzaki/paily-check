@@ -49,9 +49,9 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 			}
 			defer sem.Release(1)
 
-			v := vendorBase.Build(node.Raw)
+			v := vendorBase.Build(node.DialRaw())
 			pr := pingMacro.Ping(ctx, v, pingMacro.PingConfig{
-				URL:         probeurl.For(node, cfg.PingURL),
+				URLs:        probeurl.Targets(node, cfg.PingURL),
 				Avg:         cfg.PingAvg,
 				TimeoutMS:   cfg.PingTimeoutMS,
 				SampleGapMS: cfg.PingGapMS,
