@@ -184,6 +184,11 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 		if geo, ok := geoResults[node.ID]; ok {
 			dr.Region = geo.Region
 			dr.RegionSource = geo.Source
+			if dr.Metadata == nil {
+				dr.Metadata = make(map[string]any)
+			}
+			dr.Metadata["region"] = geo.Region
+			dr.Metadata["region_source"] = geo.Source
 		}
 
 		if sr, ok := scriptResults[node.ID]; ok {
