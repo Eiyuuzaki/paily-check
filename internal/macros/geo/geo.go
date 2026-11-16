@@ -2,6 +2,7 @@ package geo
 
 import (
 	"context"
+	"net"
 	"strings"
 
 	"github.com/openpaily/paily-check/internal/interfaces"
@@ -25,8 +26,12 @@ type GeoConfig struct {
 
 // GeoResult keeps the country label separate from the evidence that produced it.
 type GeoResult struct {
-	Region string
-	Source string
+	Region         string
+	Source         string
+	EgressIP       string
+	EgressASN      int
+	EgressASNOrg   string
+	EgressProvider string
 }
 
 // Detect resolves the exit country code for the given vendor proxy.
@@ -57,8 +62,8 @@ func Detect(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
 // Inbound MMDB fallback is kept distinct because it describes the entry, not egress.
 func DetectWithSource(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) GeoResult {
 	if strings.EqualFold(cfg.Mode, "native_api") {
-		if detected := detectNative(ctx, v, cfg); detected != "" {
-			return GeoResult{Region: detected, Source: "native_egress"}
+		if evidence := detectNativeEvidence(ctx, v, cfg); evidence.Info != nil && evidence.Info.CountryCode != "" {
+			return nativeGeoResult(evidence)
 		}
 		if !cfg.FallbackLegacy {
 			if cfg.FallbackInbound {
@@ -83,13 +88,33 @@ func inboundFallback(ctx context.Context, v interfaces.Vendor, path string) GeoR
 	return GeoResult{}
 }
 
-func detectNative(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
-	if !strings.EqualFold(cfg.Mode, "native_api") {
-		return ""
+func nativeGeoResult(evidence NativeGeoEvidence) GeoResult {
+	result := GeoResult{Source: "native_egress", EgressProvider: evidence.Provider}
+	if evidence.Info == nil || evidence.Info.CountryCode == "" {
+		return result
 	}
-	info := RunNativeGeoCheck(ctx, v, cfg.NativeAPI)
-	if info != nil && info.CountryCode != "" {
-		return strings.ToUpper(info.CountryCode)
+	result.Region = strings.ToUpper(evidence.Info.CountryCode)
+	if net.ParseIP(evidence.Info.IP) != nil {
+		result.EgressIP = evidence.Info.IP
+	}
+	if evidence.Info.ASN > 0 {
+		result.EgressASN = evidence.Info.ASN
+		result.EgressASNOrg = strings.TrimSpace(evidence.Info.ASNOrg)
+	}
+	return result
+}
+
+func detectNativeEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) NativeGeoEvidence {
+	if !strings.EqualFold(cfg.Mode, "native_api") {
+		return NativeGeoEvidence{}
+	}
+	return RunNativeGeoEvidence(ctx, v, cfg.NativeAPI)
+}
+
+func detectNative(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
+	evidence := detectNativeEvidence(ctx, v, cfg)
+	if evidence.Info != nil && evidence.Info.CountryCode != "" {
+		return strings.ToUpper(evidence.Info.CountryCode)
 	}
 	return ""
 }

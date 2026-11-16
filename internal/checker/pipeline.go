@@ -189,6 +189,20 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 			}
 			dr.Metadata["region"] = geo.Region
 			dr.Metadata["region_source"] = geo.Source
+			if geo.Source == "native_egress" {
+				if geo.EgressIP != "" {
+					dr.Metadata["egress_ip"] = geo.EgressIP
+				}
+				if geo.EgressProvider != "" {
+					dr.Metadata["egress_probe_provider"] = geo.EgressProvider
+				}
+				if geo.EgressASN > 0 {
+					dr.Metadata["egress_asn"] = geo.EgressASN
+					if geo.EgressASNOrg != "" {
+						dr.Metadata["egress_asn_org"] = geo.EgressASNOrg
+					}
+				}
+			}
 		}
 
 		if sr, ok := scriptResults[node.ID]; ok {

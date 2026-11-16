@@ -22,6 +22,11 @@ type GeoNativeAPIConfig struct {
 	Providers []string
 }
 
+type NativeGeoEvidence struct {
+	Info     *interfaces.GeoInfo
+	Provider string
+}
+
 type nativeGeoProvider struct {
 	name    string
 	url     string
@@ -30,9 +35,13 @@ type nativeGeoProvider struct {
 }
 
 func RunNativeGeoCheck(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAPIConfig) *interfaces.GeoInfo {
+	return RunNativeGeoEvidence(ctx, v, cfg).Info
+}
+
+func RunNativeGeoEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAPIConfig) NativeGeoEvidence {
 	providers := buildNativeGeoProviders(cfg.Providers)
 	if len(providers) == 0 {
-		return nil
+		return NativeGeoEvidence{}
 	}
 
 	timeout := nativeGeoDefaultTimeout
@@ -43,7 +52,7 @@ func RunNativeGeoCheck(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAP
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resultCh := make(chan *interfaces.GeoInfo, 1)
+	resultCh := make(chan NativeGeoEvidence, 1)
 	var wg sync.WaitGroup
 
 	for i := range providers {
@@ -58,7 +67,7 @@ func RunNativeGeoCheck(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAP
 			}
 
 			select {
-			case resultCh <- info:
+			case resultCh <- NativeGeoEvidence{Info: info, Provider: provider.name}:
 				cancel()
 			default:
 			}
@@ -79,14 +88,14 @@ func RunNativeGeoCheck(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAP
 		case info := <-resultCh:
 			return info
 		default:
-			return nil
+			return NativeGeoEvidence{}
 		}
 	case <-ctx.Done():
 		select {
 		case info := <-resultCh:
 			return info
 		default:
-			return nil
+			return NativeGeoEvidence{}
 		}
 	}
 }
