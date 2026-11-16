@@ -177,6 +177,7 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 				"ping_total":       pr.Total,
 				"ping_avg_success": pr.AvgSuccessMS,
 			}
+			pm["path_key"] = client.PathKeyV1(node)
 			dr.Metadata = pm
 		}
 
