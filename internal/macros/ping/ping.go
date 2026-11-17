@@ -91,6 +91,17 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	// connection answers in ~340-490ms (2026-11-17, measured on the NAS).
 	tr := traceTransport(v)
 
+	// One uncounted warm-up request. The first request through a tunnel pays
+	// worker spin-up and a full TLS-in-TLS handshake (~1.4s for a CF node)
+	// while every later request reuses that connection (~340ms). Counting the
+	// cold start both inflates the average and injects ~1s of jitter that has
+	// nothing to do with node quality, so pay it once and discard it.
+	for _, u := range candidates {
+		if _, err := singlePingT(ctx, v, u, time.Duration(t)*time.Millisecond, tr); err == nil {
+			break
+		}
+	}
+
 	for i := 0; i < n; i++ {
 		httpDelay, err := probeAnyT(ctx, v, candidates, time.Duration(t)*time.Millisecond, tr)
 		if err != nil {
