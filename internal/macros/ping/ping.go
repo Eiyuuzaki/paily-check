@@ -85,8 +85,14 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	successCount := 0
 	lastFailReason := ""
 
+	// One keep-alive transport for the whole run. Building a fresh transport per
+	// sample made every sample pay a full cold start (proxy dial + TLS-in-TLS),
+	// so a CF Worker node measured ~1.4-2.1s while the same node over a reused
+	// connection answers in ~340-490ms (2026-11-17, measured on the NAS).
+	tr := traceTransport(v)
+
 	for i := 0; i < n; i++ {
-		httpDelay, err := probeAny(ctx, v, candidates, time.Duration(t)*time.Millisecond)
+		httpDelay, err := probeAnyT(ctx, v, candidates, time.Duration(t)*time.Millisecond, tr)
 		if err != nil {
 			samples[i] = t
 			lastFailReason = classifyPingError(err)
@@ -203,9 +209,14 @@ func classifyPingError(err error) string {
 // A target that fails (timeout / TLS / reset) falls through to the next one, so
 // a single blocked target does not mark the node dead.
 func probeAny(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration) (int64, error) {
+	return probeAnyT(ctx, v, urls, timeout, nil)
+}
+
+// probeAnyT is probeAny with a shared keep-alive transport.
+func probeAnyT(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration, tr *http.Transport) (int64, error) {
 	var lastErr error
 	for _, u := range urls {
-		d, err := singlePing(ctx, v, u, timeout)
+		d, err := singlePingT(ctx, v, u, timeout, tr)
 		if err == nil {
 			return d, nil
 		}
@@ -231,15 +242,38 @@ func slowRetry(ctx context.Context, v interfaces.Vendor, urls []string, timeout 
 }
 
 func singlePing(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (httpDelay int64, err error) {
+	return singlePingT(ctx, v, rawURL, timeout, nil)
+}
+
+func singlePingT(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration, tr *http.Transport) (httpDelay int64, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	if strings.HasPrefix(rawURL, "https:") {
-		_, http, _, e := pingViaTrace(ctx, v, rawURL)
+		_, http, _, e := pingViaTraceT(ctx, v, rawURL, tr)
 		return int64(http), e
 	}
 	_, http, _, e := pingViaNetCat(ctx, v, rawURL)
 	return int64(http), e
+}
+
+// traceTransport dials every request through v and keeps connections alive so
+// subsequent samples measure steady state rather than a fresh handshake.
+func traceTransport(v interfaces.Vendor) *http.Transport {
+	return &http.Transport{
+		DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+			return v.DialTCP(ctx, "https://"+addr, interfaces.ROptionsTCP)
+		},
+		MaxIdleConns:          8,
+		MaxIdleConnsPerHost:   4,
+		IdleConnTimeout:       120 * time.Second,
+		TLSHandshakeTimeout:   15 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ForceAttemptHTTP2:     false,
+		TLSClientConfig: &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		},
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -247,21 +281,13 @@ func singlePing(ctx context.Context, v interfaces.Vendor, rawURL string, timeout
 // ---------------------------------------------------------------------------
 
 func pingViaTrace(ctx context.Context, p interfaces.Vendor, url string) (rtt, req uint16, statusCode int, err error) {
-	transport := &http.Transport{
-		DialContext: func(dCtx context.Context, _, _ string) (net.Conn, error) {
-			return p.DialTCP(dCtx, url, interfaces.ROptionsTCP)
-		},
-		MaxIdleConns:          100,
-		IdleConnTimeout:       3 * time.Second,
-		TLSHandshakeTimeout:   3 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,
-			// TLS 1.2 minimum: most production endpoints (including the default
-			// gstatic.com/generate_204 ping URL) support 1.2; requiring 1.3
-			// would silently fail against valid TLS-1.2-only targets.
-			MinVersion: tls.VersionTLS12,
-		},
+	return pingViaTraceT(ctx, p, url, nil)
+}
+
+func pingViaTraceT(ctx context.Context, p interfaces.Vendor, url string, tr *http.Transport) (rtt, req uint16, statusCode int, err error) {
+	transport := tr
+	if transport == nil {
+		transport = traceTransport(p)
 	}
 
 	httpReq, err := http.NewRequest("GET", url, nil)
