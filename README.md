@@ -1,4 +1,34 @@
-# Paily Check
+# Paily Check — Paily ON NAS
+
+> **Paily ON NAS 自托管平台的节点测活服务。**
+> 从主仓 `paily-core` 取节点，先初筛再复筛（延迟 / 抖动 / 出口地区 / 流媒体解锁 / 可选测速），把结果上报回主服务。
+
+本仓库是 [Paily ON NAS](https://github.com/Eiyuuzaki/Paily-ON-NAS) 的测活组件，基于 Paily Connect 已开源的 `paily-check` 继续维护（AGPL-3.0）。仅供个人学习自用，勿对外提供服务。
+
+![Platform](https://img.shields.io/badge/platform-linux%2Farm64-blue) ![Go](https://img.shields.io/badge/Go-1.24%2B-00ADD8) ![License](https://img.shields.io/badge/license-AGPL--3.0-orange)
+
+## 在 Paily ON NAS 中的位置
+
+```text
+   Paily 主服务 (paily-core)     源库 · 节点池
+        │  ↓ 取节点
+   Paily 测活 (paily-check)      初筛 · 复筛
+        │  ↑ 上报结果
+   Paily 主服务 (paily-core)     存活判定 · 评分 · 分发
+```
+
+## 本分支相对上游的改动
+
+- **IPv4 兜底拨号**：节点 raw 拨号地址是 IPv6、但 `server` 列有 IPv4 时，改用 IPv4 探测——与分发给客户端的地址一致，避免 Cloudflare v6 节点被误判死。
+- **多目标探测**：非 CF 节点的探测目标按 `Cloudflare(204) → Apple → gstatic` 依次兜底，任一成功即判活，避免夜间单一探测目标被封导致误杀。
+- **出口地区以实测为准**：配合主仓用实测出口 IP 回填地区，避免用入口猜测误标国家。
+
+其余用法与原仓库一致，见下方原仓库 README。
+
+---
+
+## 原仓库 README（Paily Connect 上游 `paily-check`）
+
 
 > [!IMPORTANT]
 > **本仓库为 Paily Connect 开源仓库的一部分**
