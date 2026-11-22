@@ -17,6 +17,7 @@ import (
 	"github.com/openpaily/paily-check/internal/config"
 	"github.com/openpaily/paily-check/internal/interfaces"
 	scriptMacro "github.com/openpaily/paily-check/internal/macros/script"
+	"github.com/openpaily/paily-check/internal/vendor"
 )
 
 // Run executes the full check pipeline and returns one CheckResult per node.
@@ -28,6 +29,24 @@ import (
 // Each check result is merged into the final []client.CheckResult slice.
 func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *config.Config) []client.CheckResult {
 	return run(ctx, nodes, v, cfg, initial.RunAll)
+}
+
+// logProbeCost reports how many outbound dials one phase actually spent.
+//
+// The published cost of a round ("~25 requests per node") is the number that
+// decides Cloudflare quota, round duration and how much idle window a queued
+// check has left. Until now it was an estimate assembled by reading the code.
+// Phase boundaries are the natural place to measure it because the phases run
+// sequentially: the difference between two snapshots is that phase's cost,
+// with no extra request and no per-call bookkeeping.
+func logProbeCost(stage string, before int64, nodeCount int) {
+	spent := vendor.Dials() - before
+	if nodeCount <= 0 {
+		log.Printf("[probe-cost] %s dials=%d nodes=0", stage, spent)
+		return
+	}
+	log.Printf("[probe-cost] %s dials=%d nodes=%d per_node=%.1f",
+		stage, spent, nodeCount, float64(spent)/float64(nodeCount))
 }
 
 type initialRunner func(context.Context, []client.Node, interfaces.Vendor, *config.InitialConfig, *progress.Tracker) []client.CheckResult
@@ -49,10 +68,12 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	// Initial latency check
 	// ------------------------------------------------------------------
 	t0 := time.Now()
+	costBefore := vendor.Dials()
 	tracker.Start("Initial Ping", total)
 	initialResults := runInitial(ctx, nodes, v, &cfg.Initial, tracker)
 	tracker.Done()
 	initialDuration := time.Since(t0)
+	logProbeCost("initial", costBefore, total)
 
 	// Count alive nodes.
 	threshold := cfg.Initial.AliveThresholdMS
@@ -85,9 +106,11 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	// Detailed latency check
 	// ------------------------------------------------------------------
 	t0 = time.Now()
+	costBefore = vendor.Dials()
 	tracker.Start("Deep Ping", alive)
 	pingResults := deep.RunPing(ctx, aliveNodes, v, &cfg.Deep.Ping, tracker)
 	tracker.Done()
+	logProbeCost("deep_ping", costBefore, alive)
 	logMetrics("Detailed latency", fmt.Sprintf("total=%d", alive), time.Since(t0), alive)
 
 	// ------------------------------------------------------------------
@@ -122,6 +145,7 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	// Geo detection
 	// ------------------------------------------------------------------
 	t0 = time.Now()
+	costBefore = vendor.Dials()
 	tracker.Start("Geo Detection", alive)
 	geoResults := deep.RunGeo(ctx, aliveNodes, v, &cfg.Deep.Geo, tracker)
 	geoRegions := make(map[string]string, len(geoResults))
@@ -129,6 +153,7 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 		geoRegions[nodeID] = result.Region
 	}
 	tracker.Done()
+	logProbeCost("geo", costBefore, alive)
 	logMetrics("Geo detection", fmt.Sprintf("total=%d", alive), time.Since(t0), alive)
 
 	// ------------------------------------------------------------------
@@ -139,9 +164,11 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 		log.Printf("[pipeline] script region filter: kept %d/%d node(s) for regions=%v", len(scriptNodes), len(aliveNodes), cfg.Deep.Script.Regions)
 	}
 	t0 = time.Now()
+	costBefore = vendor.Dials()
 	tracker.Start("Script Check", len(scriptNodes))
 	scriptResults := deep.RunScript(ctx, scriptNodes, v, scripts, &cfg.Deep.Script, tracker)
 	tracker.Done()
+	logProbeCost("scripts", costBefore, len(scriptNodes))
 	logMetrics("Script checks", fmt.Sprintf("total=%d", len(scriptNodes)), time.Since(t0), len(scriptNodes))
 
 	// ------------------------------------------------------------------
@@ -150,9 +177,11 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	var speedResults map[string]int
 	if cfg.Deep.Speed.Enabled {
 		t0 = time.Now()
+		costBefore = vendor.Dials()
 		tracker.Start("Speed Test", alive)
 		speedResults = deep.RunSpeed(ctx, aliveNodes, v, &cfg.Deep.Speed, tracker)
 		tracker.Done()
+		logProbeCost("speed", costBefore, alive)
 		logMetrics("Speed test", fmt.Sprintf("total=%d", alive), time.Since(t0), alive)
 	} else {
 		log.Printf("[speed test] disabled")

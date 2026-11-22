@@ -20,6 +20,9 @@ type CoreConfig struct {
 
 type ScheduleConfig struct {
 	Cron string `yaml:"cron"`
+	// UrgentPollSeconds is how often the checker asks paily-core whether an
+	// operator queued a recheck. 0 disables polling, leaving only the cron.
+	UrgentPollSeconds int `yaml:"urgent_poll_seconds"`
 }
 
 // InitialConfig controls the initial latency pass over all nodes.
@@ -115,6 +118,9 @@ func defaults() *Config {
 		},
 		Schedule: ScheduleConfig{
 			Cron: "0 */30 * * * *",
+			// One minute: an operator enqueue is acted on almost immediately,
+			// and the request is a single row read on the core side.
+			UrgentPollSeconds: 60,
 		},
 		Initial: InitialConfig{
 			PingURL:          "https://www.gstatic.com/generate_204",
@@ -206,6 +212,7 @@ func applyEnv(cfg *Config) {
 
 	// Schedule
 	envStr("CHECK_CRON", &cfg.Schedule.Cron)
+	envInt("CHECK_URGENT_POLL_SECONDS", &cfg.Schedule.UrgentPollSeconds)
 
 	// Initial
 	envStr("INITIAL_PING_URL", &cfg.Initial.PingURL)

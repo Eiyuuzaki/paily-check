@@ -70,7 +70,7 @@ func main() {
 
 	// runOnce encapsulates a single check cycle.
 	// Returns false (skipped) when another cycle is already running.
-	runOnce := func() bool {
+	runOnce := func(urgent bool) bool {
 		if !running.CompareAndSwap(0, 1) {
 			log.Printf("checker: cycle already running, skipping trigger")
 			return false
@@ -88,7 +88,13 @@ func main() {
 		var nodes []client.Node
 		var err error
 		for attempt := 0; attempt <= getNodesRetryCount; attempt++ {
-			nodes, err = cl.GetNodes()
+			if urgent {
+				// A queued round must never fall back to the rotation: an empty queue has
+				// to cost nothing, or every poll would launch a full sweep.
+				nodes, err = cl.GetUrgentNodes()
+			} else {
+				nodes, err = cl.GetNodes()
+			}
 			if err == nil {
 				break
 			}
@@ -130,9 +136,48 @@ func main() {
 		return true
 	}
 
+	// Poll paily-core for an operator-queued recheck.
+	//
+	// The cron below is the heartbeat; this is the interrupt. Adding a node or a
+	// source used to mean waiting up to two hours for the next tick, or restarting
+	// this process, which re-probes the whole rotation and throws the round away.
+	// A short poll makes an enqueue effectively immediate at one small request per
+	// interval.
+	//
+	// runOnce() guards itself with a CAS, so a poll that fires mid-cycle is skipped
+	// rather than stacked.
+	if cfg.Schedule.UrgentPollSeconds > 0 {
+		interval := time.Duration(cfg.Schedule.UrgentPollSeconds) * time.Second
+		log.Printf("checker: polling for urgent rechecks every %s", interval)
+		go func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					pending, err := cl.UrgentPending()
+					if err != nil {
+						// A failed poll must not end the loop: the cron still runs and
+						// the next tick retries.
+						log.Printf("checker: urgent poll failed: %v", err)
+						continue
+					}
+					if pending == 0 {
+						continue
+					}
+					log.Printf("checker: %d node(s) queued for an urgent recheck", pending)
+					// Queued work runs as its own small round, so it must not carry the
+					// rotation with it.
+					runOnce(true)
+				}
+			}
+		}()
+	}
 	// Validate the cron expression before starting anything.
 	c := cron.New(cron.WithSeconds())
-	_, err = c.AddFunc(cfg.Schedule.Cron, func() { runOnce() })
+	_, err = c.AddFunc(cfg.Schedule.Cron, func() { runOnce(false) })
 	if err != nil {
 		log.Fatalf("checker: invalid cron expression %q: %v", cfg.Schedule.Cron, err)
 	}
@@ -140,7 +185,7 @@ func main() {
 
 	// Run immediately on startup, then hand off to the cron scheduler.
 	log.Printf("checker: running initial cycle")
-	runOnce()
+	runOnce(false)
 
 	c.Start()
 	defer c.Stop()

@@ -92,6 +92,7 @@ func (v *ClashVendor) DialTCP(ctx context.Context, rawURL string, network interf
 		return nil, fmt.Errorf("vendor: proxy not built")
 	}
 
+	dials.Add(1)
 
 	meta, err := urlToMetadata(rawURL, constant.TCP)
 	if err != nil {
@@ -108,6 +109,7 @@ func (v *ClashVendor) DialTCP(ctx context.Context, rawURL string, network interf
 
 // DialUDP dials a UDP packet connection through the proxy.
 func (v *ClashVendor) DialUDP(ctx context.Context, rawURL string) (net.PacketConn, error) {
+	dials.Add(1)
 	if v == nil || v.proxy == nil {
 		return nil, fmt.Errorf("vendor: proxy not built")
 	}

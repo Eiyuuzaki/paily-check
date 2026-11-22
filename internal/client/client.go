@@ -108,11 +108,65 @@ func (c *Client) endpoint(parts ...string) (string, error) {
 	return endpoint, nil
 }
 
+// UrgentPending asks paily-core whether an operator queued a recheck.
+//
+// The queue exists so adding a node or a source does not have to wait for the
+// cron tick (nor restart this process, which would re-probe the whole rotation).
+// Returning only a count keeps this cheap enough to poll every minute.
+func (c *Client) UrgentPending() (int, error) {
+	endpoint, err := c.endpoint("api", "v1", "check", "pending")
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return 0, fmt.Errorf("client: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.secret)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("client: GET /api/v1/check/pending: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return 0, fmt.Errorf("client: GET /api/v1/check/pending status %d: %s", resp.StatusCode, body)
+	}
+	var out struct {
+		Pending int `json:"pending"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return 0, fmt.Errorf("client: decode pending: %w", err)
+	}
+	return out.Pending, nil
+}
+
 // GetNodes fetches all node metadata from paily-core.
 // On HTTP or parse error the error is returned and the caller should retry
 // on the next cron tick.
 func (c *Client) GetNodes() ([]Node, error) {
+	return c.getNodes("")
+}
+
+// GetUrgentNodes fetches only the operator-queued nodes.
+//
+// It is a separate round, not an addition to the rotation: measured 2026-11-22,
+// queueing one node into the scheduled round produced a 484-node sweep for a
+// single answer. The rotation occupies the first stretch of each two-hour window
+// and leaves the rest idle; the queued round runs there.
+func (c *Client) GetUrgentNodes() ([]Node, error) {
+	return c.getNodes("?mode=urgent")
+}
+
+func (c *Client) getNodes(query string) ([]Node, error) {
 	endpoint, err := c.endpoint("api", "v1", "check", "nodes")
+	if err == nil && query != "" {
+		endpoint += query
+	}
 	if err != nil {
 		return nil, err
 	}
