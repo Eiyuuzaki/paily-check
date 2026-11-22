@@ -65,6 +65,23 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	tracker := progress.New(cfg.ProgressBar.Enabled)
 
 	// ------------------------------------------------------------------
+	// Egress guard
+	// ------------------------------------------------------------------
+	// Decide once per round whether this host can reach the outside world, and
+	// hold back the nodes an unreachable family would otherwise fail. Node-level
+	// judgement cannot make that call: a dead node and a dead uplink are the same
+	// observation from inside the pipeline.
+	if egress := probeEgress(); !egress.V4 || !egress.V6 {
+		before := total
+		nodes, skipped := skipUnreachableFamily(nodes, egress)
+		logEgress(egress, before, len(nodes), skipped)
+		total = len(nodes)
+		if total == 0 {
+			return nil
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// Initial latency check
 	// ------------------------------------------------------------------
 	t0 := time.Now()
