@@ -335,6 +335,15 @@ func pingViaTraceT(ctx context.Context, p interfaces.Vendor, url string, tr *htt
 	}
 	defer resp.Body.Close()
 	connEnd := time.Now().UnixMilli()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return 0, 0, resp.StatusCode, fmt.Errorf("unexpected probe HTTP status %d", resp.StatusCode)
+	}
+	// Small probe bodies must reach EOF for HTTP/1.1 connection reuse.
+	// Bound the read for custom targets and keep it outside the RTT measurement.
+	const maxDrainBytes = 16 << 10
+	if _, err := io.Copy(io.Discard, io.LimitReader(resp.Body, maxDrainBytes)); err != nil {
+		return 0, 0, resp.StatusCode, fmt.Errorf("read probe response: %w", err)
+	}
 
 	if !strings.HasPrefix(url, "https:") {
 		return uint16(connEnd - start), uint16(connEnd - start), resp.StatusCode, nil
