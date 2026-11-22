@@ -16,7 +16,7 @@ import (
 func RunSpeed(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vendor, cfg *config.SpeedConfig, tracker *progress.Tracker) map[string]int {
 	return worker.RunNodes(ctx, nodes, cfg.Concurrency, func(ctx context.Context, node client.Node) int {
 		defer tracker.Inc()
-		v := vendorBase.Build(node.Raw)
+		v := vendorBase.Build(node.DialRaw())
 		return speedMacro.Test(ctx, v, speedMacro.SpeedConfig{
 			URL:       cfg.URL,
 			Threads:   cfg.Threads,

@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/netip"
+	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
-	D "github.com/miekg/dns"
+	"github.com/metacubex/mihomo/component/ech/echparser"
 	"github.com/metacubex/mihomo/component/resolver"
+	D "github.com/miekg/dns"
+	"golang.org/x/sync/singleflight"
 )
 
 // dohResolver is a minimal DoH (DNS-over-HTTPS JSON API) resolver that
@@ -23,10 +28,11 @@ import (
 // It also implements ResolveECH: mihomo calls it to fetch the ECHConfigList
 // from the DNS HTTPS (type 65) record - the other half of the ECH handshake.
 type dohResolver struct {
-	endpoint string
-	once     sync.Once
-	echCache map[string]echCacheEntry
-	mu       sync.Mutex
+	endpoint  string
+	once      sync.Once
+	echCache  map[string]echCacheEntry
+	mu        sync.Mutex
+	echFlight singleflight.Group
 }
 
 // echCacheEntry caches the ECHConfigList per host. CF rotates keys rarely
@@ -44,37 +50,54 @@ var _ resolver.Resolver = (*dohResolver)(nil)
 func newDoHResolver() *dohResolver {
 	return &dohResolver{endpoint: "https://223.5.5.5/resolve", echCache: map[string]echCacheEntry{}}
 }
+
 // dnsQuery performs a JSON-API DNS lookup with one retry on transport error.
 // Ali DoH is highly available, but the NAS uplink is not - a single timed-out
 // probe must not translate into a dead verdict for an otherwise healthy node.
 func (d *dohResolver) dnsQuery(ctx context.Context, name string, rtype uint16) []map[string]interface{} {
-	for attempt := 0; attempt < 2; attempt++ {
-		if attempt > 0 {
-			time.Sleep(500 * time.Millisecond)
-		}
-		ctxTimeout, cancel := context.WithTimeout(ctx, 8*time.Second)
-		url := d.endpoint + "?name=" + name + "&type=" + rrtypeName(rtype)
-		req, err := http.NewRequestWithContext(ctxTimeout, "GET", url, nil)
-		if err != nil {
-			cancel()
-			return nil
-		}
-		req.Header.Set("accept", "application/dns-json")
-		resp, err := http.DefaultClient.Do(req)
-		cancel()
-		if err != nil {
-			continue
-		}
-		var out struct {
-			Answer []map[string]interface{} `json:"Answer"`
-		}
-		err = json.NewDecoder(resp.Body).Decode(&out)
-		resp.Body.Close()
-		if err == nil {
-			return out.Answer
-		}
+	answers, err := d.queryDNS(ctx, name, rtype)
+	if err == nil || ctx.Err() != nil {
+		return answers
 	}
-	return nil
+	timer := time.NewTimer(500 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return nil
+	case <-timer.C:
+	}
+	answers, _ = d.queryDNS(ctx, name, rtype)
+	return answers
+}
+
+func (d *dohResolver) queryDNS(ctx context.Context, name string, rtype uint16) ([]map[string]interface{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	query := url.Values{"name": {name}, "type": {rrtypeName(rtype)}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("accept", "application/dns-json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("doh: HTTP status %d", resp.StatusCode)
+	}
+	var out struct {
+		Status *int
+		Answer []map[string]interface{}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, err
+	}
+	if out.Status == nil || (*out.Status != D.RcodeSuccess && *out.Status != D.RcodeNameError) {
+		return nil, fmt.Errorf("doh: unsuccessful DNS response")
+	}
+	return out.Answer, nil
 }
 
 func rrtypeName(t uint16) string {
@@ -126,72 +149,84 @@ func (d *dohResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr
 func (d *dohResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
 	return d.lookupIPs(ctx, host, true)
 }
-// HasECHRecord reports whether the host's HTTPS (type 65) DNS record carries
-// an ech= value. The checker's ECH injector uses it to decide whether adding
-// ech-opts would help (record present) or kill the dial entirely (mihomo
-// fails hard with "resolve ECH config error" when the record is missing -
-// it does NOT fall back to plaintext). Self-hosted domains outside Cloudflare
-// (e.g. hidenplay.net) have no type65 record, so their nodes must be probed
-// without ech-opts. Result is cached with the same TTL as echCache to keep
-// the per-cycle DNS cost negligible.
-func (d *dohResolver) HasECHRecord(ctx context.Context, host string) bool {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if e, ok := d.echCache[host]; ok && time.Since(e.fetchedAt) < echCacheTTL {
-		return len(e.data) > 0
+
+var errNoECHConfig = errors.New("doh: no ECH config in HTTPS record")
+var echParam = regexp.MustCompile(`(?:^|[	 ])ech=(?:"([^"]*)"|([^	 ]+))`)
+
+// ResolveECH returns a nonempty ECHConfigList and caches definitive answers.
+// Coalescing is per host, and callers waiting on another request can cancel.
+func (d *dohResolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
+	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	answers := d.dnsQuery(ctx, host, 65)
-	for _, a := range answers {
-		data, _ := a["data"].(string)
-		if strings.Contains(data, "ech=\"") {
-			// store an empty entry only when the record truly lacks ech=;
-			// when present, leave caching to ResolveECH's full parse
-			return true
-		}
+	if host == "" {
+		return nil, errNoECHConfig
 	}
-	// negative cache: remember "no ech" so every cycle doesn't re-query
-	d.echCache[host] = echCacheEntry{data: nil, fetchedAt: time.Now()}
-	return false
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result := <-d.echFlight.DoChan(host, func() (any, error) { return d.resolveECH(ctx, host) }):
+		return result.Val.([]byte), result.Err
+	}
 }
 
-// ResolveECH extracts the ech= base64 value from the HTTPS (type 65) record.
-// mihomo calls this before every ECH handshake.
-func (d *dohResolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
+func (d *dohResolver) resolveECH(ctx context.Context, host string) ([]byte, error) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if e, ok := d.echCache[host]; ok && time.Since(e.fetchedAt) < echCacheTTL {
+	e, ok := d.echCache[host]
+	d.mu.Unlock()
+	if ok && time.Since(e.fetchedAt) < echCacheTTL {
+		if len(e.data) == 0 {
+			return nil, errNoECHConfig
+		}
 		return e.data, nil
 	}
-	answers := d.dnsQuery(ctx, host, 65)
-	for _, a := range answers {
-		data, _ := a["data"].(string)
-		marker := "ech=\""
-		i := strings.Index(data, marker)
-		if i < 0 {
-			continue
-		}
-		val := data[i+len(marker):]
-		j := strings.Index(val, "\"")
-		if j < 0 {
-			continue
-		}
-		val = val[:j]
-		b, err := base64.StdEncoding.DecodeString(val)
-		if err != nil {
-			return nil, fmt.Errorf("doh: ech decode: %w", err)
-		}
-		d.echCache[host] = echCacheEntry{data: b, fetchedAt: time.Now()}
-		return b, nil
+	answers, err := d.queryDNS(ctx, host, D.TypeHTTPS)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("doh: no ECH config in HTTPS record for %s", host)
+	var list []byte
+	malformed := false
+	for _, answer := range answers {
+		if recordType, _ := answer["type"].(float64); recordType != float64(D.TypeHTTPS) {
+			continue
+		}
+		text, _ := answer["data"].(string)
+		matches := echParam.FindStringSubmatch(text)
+		if len(matches) != 3 {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(matches[1] + matches[2])
+		if err != nil {
+			malformed = true
+			continue
+		}
+		configs, err := echparser.ParseECHConfigList(data)
+		if err != nil || len(configs) == 0 {
+			malformed = true
+			continue
+		}
+		list = data
+		break
+	}
+	if len(list) == 0 && malformed {
+		return nil, fmt.Errorf("doh: invalid ECH config in HTTPS record")
+	}
+	d.mu.Lock()
+	d.echCache[host] = echCacheEntry{data: list, fetchedAt: time.Now()}
+	d.mu.Unlock()
+	if len(list) == 0 {
+		return nil, errNoECHConfig
+	}
+	return list, nil
 }
 
 func (d *dohResolver) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
 	return nil, fmt.Errorf("doh: ExchangeContext not implemented")
 }
 
-func (d *dohResolver) Invalid() bool { return false }
-func (d *dohResolver) ClearCache()  {}
+func (d *dohResolver) Invalid() bool    { return false }
+func (d *dohResolver) ClearCache()      {}
 func (d *dohResolver) ResetConnection() {}
 
 // installDoHResolver registers the DoH resolver as mihomo default.

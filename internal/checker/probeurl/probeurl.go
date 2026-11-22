@@ -85,22 +85,45 @@ func For(node client.Node, fallback string) string {
 	return fallback
 }
 
-// AppleCaptive is Apple's captive-portal probe. It is globally anycast, very
-// stable from mainland China and not a censorship target, so it is a good
-// neutral secondary when Cloudflare or Google is degraded.
+// AppleCaptive is Apple's captive-portal probe. It is stable from mainland
+// China, so it stays as a fallback, but it is NOT neutral: mainland DNS
+// resolves it to an Alibaba Cloud CDN node (…w.alikunlun.com) while the rest of
+// the world reaches Apple's own edge. Measuring a CF Worker against it therefore
+// compares two different services — 2026-11-21 measured 81ms direct from China
+// versus 896-2194ms through a Worker on the same target, which is geography of
+// the resolved backend, not node quality.
 const AppleCaptive = "https://captive.apple.com/hotspot-detect.html"
 
-// Targets returns the ordered probe targets for a node. CF-hosted nodes only
-// need to reach the Cloudflare edge, so a single CF target suffices. Other
-// nodes try CF first (anycast, stable at night) then Apple then the configured
-// fallback (gstatic), so a single degraded target is not recorded as a dead
-// node. The first target that answers wins (2026-11-17).
+// NeutralProbe is the primary probe target for every node.
+//
+// Requirements it satisfies, in the order they were learned:
+//   - Fastly-backed (mozilla.map.fastly.net), so the same anycast CDN answers
+//     wherever the probe egresses from: a Worker colo and a mainland line are
+//     both near a Fastly POP. That symmetry is what makes the number comparable.
+//   - Not Cloudflare. A CF-hosted node probing a CF-hosted target measures the
+//     CF network against itself; and connect()-based relays trip CF's loop
+//     protection on CF destinations (2026-11-19: conn_reset on a healthy node).
+//   - Not Google. gstatic is blocked by destination during the evening window,
+//     which recorded working nodes as dead (2026-11-11).
+//   - Fixed small body ("success\n"), so a captive portal or CDN error page
+//     cannot pass as a clean answer.
+const NeutralProbe = "https://detectportal.firefox.com/success.txt"
+
+// Targets returns the ordered probe targets for a node; the first that answers
+// wins. NeutralProbe leads for every node type, AppleCaptive is the fallback,
+// and the configured fallback (gstatic) is appended last when it adds a target
+// the list does not already cover.
 func Targets(node client.Node, fallback string) []string {
-	if IsCloudflare(node) {
-		return []string{CFGenerate204}
-	}
-	out := []string{CFGenerate204, AppleCaptive}
-	if fallback != "" && fallback != CFGenerate204 && fallback != AppleCaptive {
+	// Apple leads: measured from this deployment's own line (Jiangxi Mobile,
+	// 2026-11-21) it answers in 60ms while the Fastly target needs 1194ms, so
+	// leading with Fastly added ~1.2s of baseline to every reading and moved
+	// 75% of nodes to a worse number without a single node changing.
+	// NeutralProbe stays as the second target for when Apple degrades.
+	// A CF target is never used: probing a CF-hosted node against a CF-hosted
+	// destination measures Cloudflare against itself, and a connect()-based
+	// relay trips CF loop protection there.
+	out := []string{AppleCaptive, NeutralProbe}
+	if fallback != "" && fallback != AppleCaptive && fallback != NeutralProbe && fallback != CFGenerate204 {
 		out = append(out, fallback)
 	}
 	return out

@@ -25,7 +25,7 @@ import (
 
 // PingConfig carries parameters for a single ping run.
 type PingConfig struct {
-	URL       string
+	URL string
 	// URLs is an ordered list of probe targets; the first that answers wins.
 	// When empty, URL is used. See probeurl.Targets.
 	URLs      []string
@@ -54,7 +54,8 @@ type PingResult struct {
 	AvgSuccessMS int
 	// FailReason classifies why the node failed (empty when alive). Values:
 	// timeout / conn_refused / dns / tls_handshake / dial_failed / conn_reset / other.
-	FailReason string
+	FailReason  string
+	ObservedURL string // first successful request, including warm-up and slow retry
 }
 
 // Ping performs up to cfg.Avg attempts against cfg.URL through vendor v.
@@ -84,12 +85,14 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	samples := make([]int, n) // filled with T or actual rtt
 	successCount := 0
 	lastFailReason := ""
+	observedURL := ""
 
 	// One keep-alive transport for the whole run. Building a fresh transport per
 	// sample made every sample pay a full cold start (proxy dial + TLS-in-TLS),
 	// so a CF Worker node measured ~1.4-2.1s while the same node over a reused
 	// connection answers in ~340-490ms (2026-11-17, measured on the NAS).
 	tr := traceTransport(v)
+	defer tr.CloseIdleConnections()
 
 	// One uncounted warm-up request. The first request through a tunnel pays
 	// worker spin-up and a full TLS-in-TLS handshake (~1.4s for a CF node)
@@ -98,18 +101,22 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	// nothing to do with node quality, so pay it once and discard it.
 	for _, u := range candidates {
 		if _, err := singlePingT(ctx, v, u, time.Duration(t)*time.Millisecond, tr); err == nil {
+			observedURL = u
 			break
 		}
 	}
 
 	for i := 0; i < n; i++ {
-		httpDelay, err := probeAnyT(ctx, v, candidates, time.Duration(t)*time.Millisecond, tr)
+		httpDelay, target, err := probeAnyURL(ctx, v, candidates, time.Duration(t)*time.Millisecond, tr)
 		if err != nil {
 			samples[i] = t
 			lastFailReason = classifyPingError(err)
 		} else {
 			samples[i] = int(httpDelay)
 			successCount++
+			if observedURL == "" {
+				observedURL = target
+			}
 		}
 		// Pause between samples (not after the last one). Configurable:
 		// 0 disables the gap entirely — see PingConfig.SampleGapMS.
@@ -135,17 +142,18 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		// success just because we wait longer, so skipping the retry keeps dead
 		// nodes cheap.
 		if lastFailReason == "timeout" {
-			if r, ok := slowRetry(ctx, v, candidates, time.Duration(t*2)*time.Millisecond); ok {
+			if r, target, ok := slowRetryURL(ctx, v, candidates, time.Duration(t*2)*time.Millisecond); ok {
 				return PingResult{
 					LatencyMS:    int(r),
 					JitterMS:     0,
 					Success:      1,
 					Total:        n,
 					AvgSuccessMS: int(r),
+					ObservedURL:  target,
 				}
 			}
 		}
-		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason, Success: 0, Total: n}
+		return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: lastFailReason, Success: 0, Total: n, ObservedURL: observedURL}
 	}
 
 	// average = (Σ samples) / N
@@ -165,7 +173,7 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	variance /= float64(n)
 	jitter := int(math.Round(math.Sqrt(variance)))
 
-		// Mean over successful samples only (raw live-path latency, no timeout penalty).
+	// Mean over successful samples only (raw live-path latency, no timeout penalty).
 	sumOK := 0
 	for _, s := range samples {
 		if s < t {
@@ -176,7 +184,7 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	if successCount > 0 {
 		avgOK = sumOK / successCount
 	}
-	return PingResult{LatencyMS: avg, JitterMS: jitter, Success: successCount, Total: n, AvgSuccessMS: avgOK}
+	return PingResult{LatencyMS: avg, JitterMS: jitter, Success: successCount, Total: n, AvgSuccessMS: avgOK, ObservedURL: observedURL}
 }
 
 // ---------------------------------------------------------------------------
@@ -225,31 +233,36 @@ func probeAny(ctx context.Context, v interfaces.Vendor, urls []string, timeout t
 
 // probeAnyT is probeAny with a shared keep-alive transport.
 func probeAnyT(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration, tr *http.Transport) (int64, error) {
+	delay, _, err := probeAnyURL(ctx, v, urls, timeout, tr)
+	return delay, err
+}
+
+func probeAnyURL(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration, tr *http.Transport) (int64, string, error) {
 	var lastErr error
 	for _, u := range urls {
 		d, err := singlePingT(ctx, v, u, timeout, tr)
 		if err == nil {
-			return d, nil
+			return d, u, nil
 		}
 		lastErr = err
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("ping: no targets")
 	}
-	return 0, lastErr
+	return 0, "", lastErr
 }
 
 func slowRetry(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration) (int64, bool) {
-	select {
-	case <-ctx.Done():
-		return 0, false
-	default:
+	delay, _, ok := slowRetryURL(ctx, v, urls, timeout)
+	return delay, ok
+}
+
+func slowRetryURL(ctx context.Context, v interfaces.Vendor, urls []string, timeout time.Duration) (int64, string, bool) {
+	if ctx.Err() != nil {
+		return 0, "", false
 	}
-	httpDelay, err := probeAny(ctx, v, urls, timeout)
-	if err != nil {
-		return 0, false
-	}
-	return httpDelay, true
+	delay, target, err := probeAnyURL(ctx, v, urls, timeout, nil)
+	return delay, target, err == nil
 }
 
 func singlePing(ctx context.Context, v interfaces.Vendor, rawURL string, timeout time.Duration) (httpDelay int64, err error) {

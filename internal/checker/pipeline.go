@@ -27,6 +27,12 @@ import (
 //
 // Each check result is merged into the final []client.CheckResult slice.
 func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *config.Config) []client.CheckResult {
+	return run(ctx, nodes, v, cfg, initial.RunAll)
+}
+
+type initialRunner func(context.Context, []client.Node, interfaces.Vendor, *config.InitialConfig, *progress.Tracker) []client.CheckResult
+
+func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *config.Config, runInitial initialRunner) []client.CheckResult {
 	total := len(nodes)
 
 	// ------------------------------------------------------------------
@@ -44,7 +50,7 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 	// ------------------------------------------------------------------
 	t0 := time.Now()
 	tracker.Start("Initial Ping", total)
-	initialResults := initial.RunAll(ctx, nodes, v, &cfg.Initial, tracker)
+	initialResults := runInitial(ctx, nodes, v, &cfg.Initial, tracker)
 	tracker.Done()
 	initialDuration := time.Since(t0)
 
@@ -58,13 +64,10 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 		resultByID[r.NodeID] = r
 		lms := r.Initial.LatencyMS
 		if lms != -1 && (threshold <= 0 || lms <= threshold) {
-			// Find the corresponding Node struct.
-			for _, n := range nodes {
-				if n.ID == r.NodeID {
-					aliveNodes = append(aliveNodes, n)
-					break
-				}
-			}
+			// RunAll preserves input order and provides the selected dial snapshot.
+			n := nodes[i]
+			n.ProbeRaw = r.ProbeRaw
+			aliveNodes = append(aliveNodes, n)
 		}
 	}
 
@@ -179,6 +182,13 @@ func Run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 			}
 			pm["path_key"] = client.PathKeyV1(node)
 			dr.Metadata = pm
+		}
+
+		if r.ECH != nil {
+			if dr.Metadata == nil {
+				dr.Metadata = make(map[string]any)
+			}
+			dr.Metadata["ech_assessment"] = r.ECH
 		}
 
 		if geo, ok := geoResults[node.ID]; ok {

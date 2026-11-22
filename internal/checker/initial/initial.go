@@ -17,7 +17,7 @@ import (
 )
 
 // RunAll performs an initial ping on every node concurrently (up to
-// cfg.Concurrency at a time) using vendorBase.Build(node.Raw) to create
+// cfg.Concurrency at a time) using vendorBase.Build(node.DialRaw()) to create
 // per-node proxy instances.
 //
 // Returns one client.CheckResult per node. Deep is always nil (filled in
@@ -61,9 +61,11 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 				NodeID:  node.ID,
 				Initial: client.InitialResult{LatencyMS: pr.LatencyMS, FailReason: pr.FailReason},
 			}
+			recordOrdinarySuccess(node, &results[i], pr.ObservedURL)
 		}()
 	}
 
 	wg.Wait()
+	runECHComparisons(ctx, nodes, results, cfg.ECHMaxCandidates, cfg.PingTimeoutMS, productionECH(vendorBase))
 	return results
 }

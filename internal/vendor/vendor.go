@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"net/url"
@@ -52,6 +53,7 @@ func (v *ClashVendor) Status() interfaces.VendorStatus {
 // raw is the map[string]interface{} stored in client.Node.Raw.
 // Numbers in the map may be float64 (from JSON); mihomo handles the coercion.
 func (v *ClashVendor) Build(raw map[string]interface{}) interfaces.Vendor {
+	raw = maps.Clone(raw)
 	n := &ClashVendor{raw: raw}
 
 	// extract human-readable metadata before parsing
@@ -89,6 +91,7 @@ func (v *ClashVendor) DialTCP(ctx context.Context, rawURL string, network interf
 	if v == nil || v.proxy == nil {
 		return nil, fmt.Errorf("vendor: proxy not built")
 	}
+
 
 	meta, err := urlToMetadata(rawURL, constant.TCP)
 	if err != nil {

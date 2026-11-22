@@ -30,6 +30,7 @@ type InitialConfig struct {
 	PingGapMS        int    `yaml:"ping_gap_ms"` // pause between samples; 0 disables
 	Concurrency      int    `yaml:"concurrency"`
 	AliveThresholdMS int    `yaml:"alive_threshold_ms"`
+	ECHMaxCandidates int    `yaml:"ech_max_candidates"` // 0 disables ECH comparison
 }
 
 // DeepPingConfig controls detailed latency checks.
@@ -38,7 +39,7 @@ type DeepPingConfig struct {
 	Avg            int    `yaml:"avg"`
 	PingURL        string `yaml:"ping_url"`
 	TimeoutMS      int    `yaml:"timeout_ms"`
-	GapMS          int    `yaml:"gap_ms"` // pause between samples; 0 disables
+	GapMS          int    `yaml:"gap_ms"`           // pause between samples; 0 disables
 	FilterDeadDeep bool   `yaml:"filter_dead_deep"` // drop nodes whose deep ping latency is -1
 }
 
@@ -122,6 +123,7 @@ func defaults() *Config {
 			PingGapMS:        1000,
 			Concurrency:      50,
 			AliveThresholdMS: 3000,
+			ECHMaxCandidates: 40,
 		},
 		Deep: DeepConfig{
 			Ping: DeepPingConfig{
@@ -212,6 +214,7 @@ func applyEnv(cfg *Config) {
 	envInt("INITIAL_PING_GAP_MS", &cfg.Initial.PingGapMS)
 	envInt("INITIAL_CONCURRENCY", &cfg.Initial.Concurrency)
 	envInt("INITIAL_ALIVE_THRESHOLD_MS", &cfg.Initial.AliveThresholdMS)
+	envInt("INITIAL_ECH_MAX_CANDIDATES", &cfg.Initial.ECHMaxCandidates)
 
 	// Deep ping
 	envInt("DEEP_PING_CONCURRENCY", &cfg.Deep.Ping.Concurrency)

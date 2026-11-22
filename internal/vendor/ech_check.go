@@ -11,5 +11,11 @@ func HasECHRecord(ctx context.Context, host string) bool {
 	if host == "" {
 		return false
 	}
-	return globalDoH.HasECHRecord(ctx, host)
+	_, err := ResolveECH(ctx, host)
+	return err == nil
+}
+
+// ResolveECH returns the HTTPS record's decoded ECHConfigList.
+func ResolveECH(ctx context.Context, host string) ([]byte, error) {
+	return globalDoH.ResolveECH(ctx, host)
 }

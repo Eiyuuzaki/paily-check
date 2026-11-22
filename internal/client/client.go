@@ -28,6 +28,7 @@ type Node struct {
 	Server   string                 `json:"server"`
 	Protocol string                 `json:"protocol"`
 	Raw      map[string]interface{} `json:"raw"`
+	ProbeRaw map[string]interface{} `json:"-"` // selected dialing snapshot for this check cycle
 }
 
 // InitialResult carries the outcome of the initial latency check.
@@ -53,9 +54,11 @@ type DeepResult struct {
 // CheckResult is one entry in the POST /api/v1/check/results payload.
 // Deep is omitted when the node failed the initial latency check.
 type CheckResult struct {
-	NodeID  string        `json:"node_id"`
-	Initial InitialResult `json:"initial"`
-	Deep    *DeepResult   `json:"deep,omitempty"`
+	NodeID   string                 `json:"node_id"`
+	Initial  InitialResult          `json:"initial"`
+	Deep     *DeepResult            `json:"deep,omitempty"`
+	ECH      *ECHAssessment         `json:"-"`
+	ProbeRaw map[string]interface{} `json:"-"`
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +250,9 @@ func (c *Client) PostResults(results []CheckResult) error {
 // because their IPv6 entry is unreachable from this line (2026-11-17).
 // The original raw map is never mutated.
 func (n Node) DialRaw() map[string]interface{} {
+	if n.ProbeRaw != nil {
+		return n.ProbeRaw
+	}
 	raw := n.Raw
 	if raw == nil {
 		return raw

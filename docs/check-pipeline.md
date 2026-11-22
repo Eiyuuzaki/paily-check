@@ -35,6 +35,9 @@
 | `initial.ping_timeout_ms` | `INITIAL_PING_TIMEOUT_MS` | `3000` | 单次 Ping 超时，单位毫秒。 |
 | `initial.concurrency` | `INITIAL_CONCURRENCY` | `50` | 初筛并发数。 |
 | `initial.alive_threshold_ms` | `INITIAL_ALIVE_THRESHOLD_MS` | `3000` | 超过该延迟的节点不再进入复筛；设为 `0` 表示除不可达外全部继续。 |
+| `initial.ech_max_candidates` | `INITIAL_ECH_MAX_CANDIDATES` | `40` | 每轮 ECH 对照的候选上限，最大 40，设为 0 关闭对照。 |
+
+仅对初筛遇到连接重置或 TLS 握手失败、入口已固定的 VLESS/VMess WS TLS 节点做 ECH 对照。对照并发 2，每节点最多 30 秒。普通 TLS 成功时保留普通模式；仅两次普通入口拨号失败且两次 ECH 都请求到同一 HTTPS 探针的 204 时，用已验证的 ECH 配置进行后续复筛。源显式 ECH 配置保持原样。
 
 延迟取所有 Ping 的平均值。若某次 Ping 超时，按超时时间计入平均；若全部超时，延迟记为 `-1`。
 
