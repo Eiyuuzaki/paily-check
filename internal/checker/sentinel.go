@@ -78,6 +78,10 @@ func probeSentinel() error {
 			continue
 		}
 		resp.Body.Close()
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			lastErr = fmt.Errorf("sentinel %s returned HTTP %d", target, resp.StatusCode)
+			continue
+		}
 		if i == 0 {
 			domesticOK = true
 		} else {
