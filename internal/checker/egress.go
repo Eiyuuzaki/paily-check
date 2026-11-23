@@ -8,13 +8,20 @@ import (
 	"github.com/openpaily/paily-check/internal/client"
 )
 
-// egressTargets are the baselines used to decide whether this host can reach
-// the outside world at all. Two per family on purpose: a single unreachable
-// target must not be mistaken for a dead uplink, so a family is only declared
-// down when every one of its targets fails.
+// Egress baselines. Two per family, and a family is only declared down when
+// every one of its targets fails, so a single blocked target cannot be mistaken
+// for a dead uplink.
+//
+// Domestic resolvers on purpose. The first version used 1.1.1.1 and Google's v6
+// resolver, and was wrong: measured from this line on 2026-11-23 with the uplink
+// confirmed healthy, 1.1.1.1:443, 2606:4700:4700::1111, 2001:4860:4860::8888 and
+// 2402:4e00:: were all unreachable, while 223.5.5.5, dns.alidns.com,
+// 2400:3200::1 and 2400:3200:baba::1 answered. A liveness baseline must be a
+// target that is reachable whenever the line is up; picking one that is commonly
+// blocked builds a machine for declaring outages that are not happening.
 var (
-	egressV4Targets = []string{"1.1.1.1:443", "223.5.5.5:443"}
-	egressV6Targets = []string{"[2606:4700:4700::1111]:443", "[2001:4860:4860::8888]:443"}
+	egressV4Targets = []string{"223.5.5.5:443", "dns.alidns.com:443"}
+	egressV6Targets = []string{"[2400:3200::1]:443", "[2400:3200:baba::1]:443"}
 )
 
 // egressState records what this host could reach when a round started.
