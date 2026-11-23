@@ -50,7 +50,19 @@ func CheckSentinel() error {
 	case sentinelStateDown:
 		return fmt.Errorf("local network down (cached verdict)")
 	}
+	err := probeSentinel()
+	if err == nil {
+		sentinelVerdict.Store(sentinelStateOK)
+	} else {
+		sentinelVerdict.Store(sentinelStateDown)
+	}
+	return err
+}
 
+// probeSentinel always performs the actual HTTP probes. It is separate from
+// CheckSentinel because the cycle-end guard must not reuse the cycle-start
+// cache: a router can fail while node checks are already running.
+func probeSentinel() error {
 	domesticOK, intlOK := false, false
 	var lastErr error
 	for i, target := range sentinelTargets {
@@ -72,12 +84,9 @@ func CheckSentinel() error {
 			intlOK = true
 		}
 	}
-
 	if domesticOK || intlOK {
-		sentinelVerdict.Store(sentinelStateOK)
 		return nil
 	}
-	sentinelVerdict.Store(sentinelStateDown)
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all sentinel probes failed")
 	}
@@ -88,5 +97,7 @@ func CheckSentinel() error {
 // network went down mid-cycle, results would be contaminated garbage and
 // must not be posted.
 func DiscardSentinel() error {
-	return CheckSentinel()
+	// Always probe again: this guard exists to catch an outage that began
+	// while the node checks were running, after the cycle-start verdict was cached.
+	return probeSentinel()
 }
