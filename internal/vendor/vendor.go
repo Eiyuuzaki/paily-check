@@ -33,6 +33,14 @@ type ClashVendor struct {
 	proxyType string
 }
 
+func init() {
+	// mihomo may default the resolver to IPv4-only. The checker has to reach IPv6
+	// entries, so AAAA answers must be allowed. Set once here rather than on the
+	// dial path: resolver.DisableIPv6 is a package-level bool, and writing it from
+	// every concurrent dial is a data race even though the value is idempotent.
+	resolver.DisableIPv6 = false
+}
+
 // New returns a zero-value ClashVendor ready to be configured via Build.
 func New() interfaces.Vendor {
 	return &ClashVendor{}
@@ -99,20 +107,17 @@ func (v *ClashVendor) DialTCP(ctx context.Context, rawURL string, network interf
 		return nil, fmt.Errorf("vendor: build tcp metadata: %w", err)
 	}
 
-	// Ensure IPv6 resolution is not forcibly disabled.
-	if resolver.DisableIPv6 {
-		resolver.DisableIPv6 = false
-	}
-
 	return v.proxy.DialContext(ctx, &meta)
 }
 
 // DialUDP dials a UDP packet connection through the proxy.
 func (v *ClashVendor) DialUDP(ctx context.Context, rawURL string) (net.PacketConn, error) {
-	dials.Add(1)
 	if v == nil || v.proxy == nil {
 		return nil, fmt.Errorf("vendor: proxy not built")
 	}
+	// Counted after the guard, like DialTCP: a vendor that never dialled must not
+	// inflate the probe-cost report that decides Cloudflare quota.
+	dials.Add(1)
 
 	meta, err := urlToMetadata(rawURL, constant.UDP)
 	if err != nil {

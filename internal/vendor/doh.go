@@ -167,7 +167,17 @@ func (d *dohResolver) ResolveECH(ctx context.Context, host string) ([]byte, erro
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case result := <-d.echFlight.DoChan(host, func() (any, error) { return d.resolveECH(ctx, host) }):
-		return result.Val.([]byte), result.Err
+		if result.Err != nil {
+			return nil, result.Err
+		}
+		// Checked assertion: a panic here would run in a check goroutine and take
+		// the whole process down mid-round, and singleflight does not promise the
+		// value is non-nil.
+		list, ok := result.Val.([]byte)
+		if !ok {
+			return nil, errNoECHConfig
+		}
+		return list, nil
 	}
 }
 
