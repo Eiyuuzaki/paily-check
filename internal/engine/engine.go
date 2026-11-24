@@ -1,7 +1,9 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -43,21 +45,36 @@ func VMNewWithVendor(p interfaces.Vendor, network interfaces.RequestOptionsNetwo
 	return vm
 }
 
-// IsNotExtractError reports whether err is the "cannot extract function" sentinel.
+// ErrNoCallback reports that the script does not expose the function the
+// caller asked for. It is a sentinel so callers match on errors.Is rather than
+// on message text, which would change silently if the wording ever moved.
+var ErrNoCallback = errors.New("cannot extract function from vm")
+
+// IsNotExtractError reports whether err is the missing-callback sentinel.
 func IsNotExtractError(err error) bool {
-	return err != nil && err.Error() == "cannot extract function from vm"
+	return errors.Is(err, ErrNoCallback)
 }
 
-// ThrowExecTaskErr logs the error and returns whether an error occurred.
+// ThrowExecTaskErr logs the error and reports whether one occurred.
+//
+// This used to discard the error entirely - the comment claimed it logged, but
+// nothing did, so a script with a syntax error, a thrown exception or a timeout
+// produced unlocked=false or an empty region with no diagnostic anywhere. Both
+// callers turn a failure into a normal-looking negative result, which makes the
+// missing log the only thing that would tie the two together.
 func ThrowExecTaskErr(scenario string, err error) bool {
-	if err != nil {
-		if !IsNotExtractError(err) {
-			// non-fatal: log and carry on
-			_ = scenario // available for structured logging if needed
-		}
+	if err == nil {
+		return false
+	}
+	if IsNotExtractError(err) {
+		// A script that never defines its callback is an authoring mistake, not a
+		// runtime failure: worth naming separately so the reader knows which side
+		// to look at first.
+		log.Printf("[engine] %s: script does not expose its callback: %v", scenario, err)
 		return true
 	}
-	return false
+	log.Printf("[engine] %s: %v", scenario, err)
+	return true
 }
 
 // HasFunction returns true when vm exposes a callable with the given name.
@@ -80,7 +97,7 @@ func ExecTaskCallback(vm *goja.Runtime, caller string, args ...interface{}) (ret
 
 	fn, ok := goja.AssertFunction(vm.Get(caller))
 	if !ok {
-		return goja.Undefined(), fmt.Errorf("cannot extract function from vm")
+		return goja.Undefined(), fmt.Errorf("%w: %s", ErrNoCallback, caller)
 	}
 
 	values := make([]goja.Value, 0, len(args))
@@ -97,6 +114,7 @@ func RunWithTimeout(vm *goja.Runtime, timeout time.Duration, fn func() (goja.Val
 	vmLock := sync.Mutex{}
 	finished := false
 
+	var timer *time.Timer
 	if timeout > 0 {
 		// clamp to [1s, 60s]
 		if timeout < time.Second {
@@ -106,7 +124,7 @@ func RunWithTimeout(vm *goja.Runtime, timeout time.Duration, fn func() (goja.Val
 			timeout = time.Minute
 		}
 
-		time.AfterFunc(timeout, func() {
+		timer = time.AfterFunc(timeout, func() {
 			vmLock.Lock()
 			defer vmLock.Unlock()
 			if !finished {
@@ -121,6 +139,12 @@ func RunWithTimeout(vm *goja.Runtime, timeout time.Duration, fn func() (goja.Val
 	vmLock.Lock()
 	finished = true
 	vmLock.Unlock()
+
+	// Stop the timer when the script finishes first; otherwise it keeps a
+	// goroutine alive until the deadline fires a no-op interrupt.
+	if timer != nil {
+		timer.Stop()
+	}
 
 	return
 }
