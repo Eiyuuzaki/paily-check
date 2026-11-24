@@ -2,6 +2,7 @@ package script
 
 import (
 	"context"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,34 @@ type NativeHandler func(ctx context.Context, v interfaces.Vendor, timeoutMS int)
 
 var nativeHandlers = map[string]NativeHandler{}
 
+// warnNativeOnce keeps the empty-registry warning to one line per process.
+// RunAllWithEngine is called once per node, so an unwarned variant would emit
+// one line per node per round.
+var warnNativeOnce sync.Once
+
+// warnNativeWithoutHandlers reports an engine mode that cannot do any work.
+//
+// EngineNative has no fallback: with no handler registered, runEntry returns
+// false for every script, so every node is recorded as "does not unlock" — no
+// error, no failing phase, just wrong data. That is worse than a crash because
+// nothing points at the cause. EngineAuto degrades to goja instead, which is
+// only worth a note.
+func warnNativeWithoutHandlers(mode EngineMode) {
+	if mode != EngineNative && mode != EngineAuto {
+		return
+	}
+	if len(nativeHandlers) > 0 {
+		return
+	}
+	warnNativeOnce.Do(func() {
+		if mode == EngineNative {
+			log.Printf("[script] engine=native but no native handler is registered: every script will report unlocked=false. Register a handler with RegisterNativeHandler or set engine=goja.")
+			return
+		}
+		log.Printf("[script] engine=auto with no native handler registered: every script falls back to goja, same as engine=goja.")
+	})
+}
+
 // RegisterNativeHandler adds a script-native implementation. Names are matched
 // case-insensitively against ScriptEntry.Name (the JS filename without .js).
 func RegisterNativeHandler(name string, handler NativeHandler) {
@@ -72,6 +101,7 @@ func RunAllWithEngine(ctx context.Context, v interfaces.Vendor, entries []Script
 		sem = semaphore.NewWeighted(32)
 	}
 	mode := parseEngineMode(engine)
+	warnNativeWithoutHandlers(mode)
 
 	results := make(map[string]bool, len(entries))
 	mu := sync.Mutex{}
