@@ -3,8 +3,8 @@ package speed
 
 import (
 	"context"
-	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -82,22 +82,22 @@ func Test(ctx context.Context, v interfaces.Vendor, cfg SpeedConfig) int {
 	cancel()
 	initWG.Wait()
 
-	// Average over all non-zero seconds.
+	// Average over the whole test window, not only the seconds that carried
+	// data. Dividing by the count of non-zero seconds reports a burst as if it
+	// were sustained: a node that stalls for seven of eight seconds and bursts
+	// once would be labelled with that burst rate, and the label is what a user
+	// reads as a promise.
 	var total uint64
-	count := 0
 	for _, b := range buckets {
-		if b > 0 {
-			total += b
-			count++
-		}
+		total += b
 	}
-	if count == 0 {
+	if total == 0 {
 		return 0
 	}
-	avgBytesPerSec := total / uint64(count)
-	// Convert bytes/s → kbps (kilobits per second, 1 kbps = 1000 bits/s)
-	fmt.Printf("[speed] node=%s avg_speed=%dkbps\n", v.ProxyInfo().Name, int(avgBytesPerSec*8/1000))
+	avgBytesPerSec := total / uint64(len(buckets))
+	// Convert bytes/s -> kbps (kilobits per second, 1 kbps = 1000 bits/s).
 	kbps := int(avgBytesPerSec * 8 / 1000)
+	log.Printf("[speed] node=%s avg_speed=%dkbps", v.ProxyInfo().Name, kbps)
 	return kbps
 }
 

@@ -265,14 +265,13 @@ func run(ctx context.Context, nodes []client.Node, v interfaces.Vendor, cfg *con
 			dr.Streaming = sr
 		}
 
-		if speedResults == nil {
-			kv := -1
+		// Left nil when the speed test is disabled or the node was not measured.
+		// The column contract is 0 = not measured, so an absent pointer lands on
+		// that default; the previous -1 meant "disabled" only to this function and
+		// read as a measurement everywhere downstream.
+		if spd, ok := speedResults[node.ID]; ok {
+			kv := spd
 			dr.SpeedKbps = &kv
-		} else {
-			if spd, ok := speedResults[node.ID]; ok {
-				kv := spd
-				dr.SpeedKbps = &kv
-			}
 		}
 
 		r.Deep = dr
