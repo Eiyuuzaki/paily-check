@@ -34,30 +34,6 @@ type GeoResult struct {
 	EgressProvider string
 }
 
-// Detect resolves the exit country code for the given vendor proxy.
-// Returns an ISO 3166-1 alpha-2 upper-case code (e.g. "HK", "US") or ""
-// when detection fails.
-func Detect(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
-	if strings.EqualFold(cfg.Mode, "native_api") {
-		if detected := detectNative(ctx, v, cfg); detected != "" {
-			return detected
-		}
-		if !cfg.FallbackLegacy {
-			if cfg.FallbackInbound {
-				return fallbackNodeAddressMMDB(ctx, v, cfg.MmdbPath)
-			}
-			return ""
-		}
-	}
-	if detected := detectLegacy(v, cfg); detected != "" {
-		return detected
-	}
-	if !cfg.FallbackInbound {
-		return ""
-	}
-	return fallbackNodeAddressMMDB(ctx, v, cfg.MmdbPath)
-}
-
 // DetectWithSource returns the detected region and the method that produced it.
 // Inbound MMDB fallback is kept distinct because it describes the entry, not egress.
 func DetectWithSource(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) GeoResult {
@@ -109,14 +85,6 @@ func detectNativeEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoConfi
 		return NativeGeoEvidence{}
 	}
 	return RunNativeGeoEvidence(ctx, v, cfg.NativeAPI)
-}
-
-func detectNative(ctx context.Context, v interfaces.Vendor, cfg GeoConfig) string {
-	evidence := detectNativeEvidence(ctx, v, cfg)
-	if evidence.Info != nil && evidence.Info.CountryCode != "" {
-		return strings.ToUpper(evidence.Info.CountryCode)
-	}
-	return ""
 }
 
 func detectLegacy(v interfaces.Vendor, cfg GeoConfig) string {
