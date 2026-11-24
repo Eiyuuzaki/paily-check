@@ -11,8 +11,6 @@ import (
 	"net/url"
 	"strings"
 	"time"
-
-	"github.com/openpaily/paily-check/internal/vendor"
 )
 
 const apiBodyTimeout = 7 * time.Minute
@@ -194,69 +192,18 @@ func (c *Client) getNodes(query string) ([]Node, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("client: decode nodes: %w", err)
 	}
-	// ECH injection is intentionally disabled here (2026-11-15 A/B probe):
-	// same node, same minute — plaintext SNI handshake succeeded (2988ms) while
-	// the ech-opts variant died with tls_handshake. Probing is about whether the
-	// NODE is alive, not whether the user client's full ECH chain works; the
-	// distribution generators still inject ech-opts for clients. Re-enable only
-	// after ECH handshakes through these entry IPs are verified stable again.
-	for i := range out.Nodes {
-		_ = out.Nodes[i]
-	}
+	// ECH injection is deliberately absent from this path (2026-11-15 A/B probe):
+	// same node, same minute — a plaintext SNI handshake succeeded (2988ms) while
+	// the ech-opts variant died with tls_handshake. Probing asks whether the NODE
+	// is alive, not whether the user client's full ECH chain works. The
+	// distribution generators still inject ech-opts for clients, and
+	// initial/ech.go runs its own A/B assessment before anything is injected.
+	//
+	// The former injector was removed 2026-11-25: nothing called it, and blind
+	// injection against a domain whose HTTPS record carries no ech= value is a
+	// hard dial failure in mihomo that marked healthy non-CF nodes dead with a
+	// misleading "dns" fail_reason (AGENTS.md 2026-11-12).
 	return out.Nodes, nil
-}
-
-// injectECH adds mihomo ech-opts to TLS proxies so the checker probe path
-// exercises the same encrypted SNI the distributed config uses. Since GFW
-// started keeping per-domain SNI blocklists (AGENTS.md 2026-11-11), a probe
-// without ECH RSTs on domains the user-facing config happily connects to,
-// which marks live nodes dead and keeps them out of distribution forever.
-// REALITY is excluded: it needs the plaintext SNI to impersonate a real site,
-// and mihomo rejects the combination ("Reality is conflict with ECH").
-// Nodes may already carry ech-opts from their own raw payload - keep those.
-//
-// 2026-11-12: only inject when the server domain actually advertises an ech=
-// value in its DNS HTTPS (type65) record. mihomo v1.19.33 treats
-// ech-opts{enable:true} against a domain without one as a hard dial failure
-// ("resolve ECH config error: no ECH config found in DNS records") - it does
-// NOT fall back to plaintext. Blind injection marked every healthy non-CF
-// node (hidenplay.net etc.) dead with a misleading "dns" fail_reason and
-// kept our own self-built exits out of distribution (AGENTS.md 2026-11-12).
-// The record lookup goes through the same Ali DoH resolver mihomo uses and
-// is negative-cached, so the per-cycle cost is one query per distinct
-// non-ECH domain.
-// InjectECHForTest exposes the injector to diagnostic commands.
-func InjectECHForTest(raw map[string]interface{}) { injectECH(raw) }
-
-// Deprecated: kept for the test hook only; not called from GetNodes.
-func injectECH(raw map[string]interface{}) {
-	if raw == nil {
-		return
-	}
-	if tls, ok := raw["tls"].(bool); !ok || !tls {
-		return
-	}
-	if _, isReality := raw["reality-opts"]; isReality {
-		return
-	}
-	if _, has := raw["ech-opts"]; has {
-		return
-	}
-	host, _ := raw["servername"].(string)
-	if host == "" {
-		host, _ = raw["server"].(string)
-	}
-	if host == "" || net.ParseIP(host) != nil {
-		// IP-literal server: no DNS record to consult; mihomo would fail the
-		// same way, so keep plaintext TLS (ECH never applies to bare IPs).
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if !vendor.HasECHRecord(ctx, host) {
-		return
-	}
-	raw["ech-opts"] = map[string]interface{}{"enable": true}
 }
 
 // PostResults uploads all check results to paily-core.
