@@ -29,7 +29,13 @@ const CFGenerate204 = "https://cp.cloudflare.com/generate_204"
 // the resolved backend, not node quality.
 const AppleCaptive = "https://captive.apple.com/hotspot-detect.html"
 
-// NeutralProbe is the primary probe target for every node.
+// NeutralProbe is the second probe target for every node.
+//
+// It leads nothing: Targets emits AppleCaptive first, because measured from this
+// deployment's own line Apple answers in ~60ms while this target needs ~1194ms,
+// and leading with the slower one added 1.2s of baseline to every reading
+// without a single node changing. What follows is why this target is still
+// emitted, and why it is chosen rather than any of the obvious alternatives.
 //
 // Requirements it satisfies, in the order they were learned:
 //   - Fastly-backed (mozilla.map.fastly.net), so the same anycast CDN answers
@@ -45,9 +51,9 @@ const AppleCaptive = "https://captive.apple.com/hotspot-detect.html"
 const NeutralProbe = "https://detectportal.firefox.com/success.txt"
 
 // Targets returns the ordered probe targets for a node; the first that answers
-// wins. NeutralProbe leads for every node type, AppleCaptive is the fallback,
-// and the configured fallback (gstatic) is appended last when it adds a target
-// the list does not already cover.
+// wins. AppleCaptive leads, NeutralProbe follows as the fallback, and the
+// configured fallback (gstatic) is appended last when it adds a target the list
+// does not already cover.
 func Targets(node client.Node, fallback string) []string {
 	// Apple leads: measured from this deployment's own line (Jiangxi Mobile,
 	// 2026-11-21) it answers in 60ms while the Fastly target needs 1194ms, so
