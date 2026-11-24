@@ -6,8 +6,6 @@ import (
 	"context"
 	"sync"
 
-	"golang.org/x/sync/semaphore"
-
 	"github.com/openpaily/paily-check/internal/checker/probeurl"
 	"github.com/openpaily/paily-check/internal/checker/progress"
 	"github.com/openpaily/paily-check/internal/client"
@@ -29,7 +27,14 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 		concurrency = 50
 	}
 
-	sem := semaphore.NewWeighted(int64(concurrency))
+	// A buffered channel, not semaphore.Weighted. Acquire reports context
+	// cancellation as an error, and there is no correct result to record for a
+	// node that was never probed: writing -1 reports "dead" for a node the round
+	// simply did not reach, which the windowed verdict (ok_count >= bad_count)
+	// then turns into a kill after two such rounds. Run is handed a context that
+	// is never cancelled — cmd/checker passes context.Background() — so that path
+	// could not run anyway; a channel has no such path at all.
+	sem := make(chan struct{}, concurrency)
 	results := make([]client.CheckResult, len(nodes))
 	wg := sync.WaitGroup{}
 
@@ -40,14 +45,8 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 			defer wg.Done()
 			defer tracker.Inc()
 
-			if err := sem.Acquire(ctx, 1); err != nil {
-				results[i] = client.CheckResult{
-					NodeID:  node.ID,
-					Initial: client.InitialResult{LatencyMS: -1, FailReason: "semaphore_timeout"},
-				}
-				return
-			}
-			defer sem.Release(1)
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			v := vendorBase.Build(node.DialRaw())
 			pr := pingMacro.Ping(ctx, v, pingMacro.PingConfig{

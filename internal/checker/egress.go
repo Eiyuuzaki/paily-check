@@ -73,29 +73,56 @@ func anyReachable(targets []string) bool {
 	return false
 }
 
+// splitHost normalises an address that may or may not carry a port.
+func splitHost(server string) string {
+	if h, _, err := net.SplitHostPort(server); err == nil {
+		return h
+	}
+	return server
+}
+
 // isIPv6Endpoint reports whether a node's server is a literal IPv6 address.
 // Hostnames are never treated as IPv6: they may resolve to either family and
 // dropping them on an IPv6 outage would discard nodes that still work.
 func isIPv6Endpoint(server string) bool {
-	host := server
-	if h, _, err := net.SplitHostPort(server); err == nil {
-		host = h
-	}
-	ip := net.ParseIP(host)
+	ip := net.ParseIP(splitHost(server))
 	return ip != nil && ip.To4() == nil
+}
+
+// isIPv4Endpoint reports whether a node's server is a literal IPv4 address.
+// Mirror of isIPv6Endpoint, for the same reason read the other way round: an
+// IPv4 outage must not condemn nodes that dial over IPv6.
+func isIPv4Endpoint(server string) bool {
+	ip := net.ParseIP(splitHost(server))
+	return ip != nil && ip.To4() != nil
 }
 
 // skipUnreachableFamily drops the nodes the uplink cannot reach, and reports how
 // many were kept back. Dropping is the safe direction: a node absent from a round
 // keeps its previous state, so an outage pauses judgement instead of failing it.
+//
+// Both families are guarded. The first version only held back IPv6 nodes and
+// let an IPv4 outage condemn every IPv4 node in the pool, which is the same
+// 2026-11-23 mistake with the families swapped — and an IPv4 outage (a
+// re-dialled CGNAT address, a router reboot) is the more likely of the two.
 func skipUnreachableFamily(nodes []client.Node, e egressState) ([]client.Node, int) {
-	if e.V6 {
+	if e.V4 && e.V6 {
 		return nodes, 0
+	}
+	if !e.V4 && !e.V6 {
+		// Neither family reaches out, so no probe can tell a dead node from a dead
+		// uplink. Skip the whole round: an absent result leaves every node's state
+		// untouched, which is the only honest answer. Probing the hostnames anyway
+		// would fail them for an outage that is ours.
+		return nil, len(nodes)
 	}
 	kept := make([]client.Node, 0, len(nodes))
 	skipped := 0
 	for _, n := range nodes {
-		if isIPv6Endpoint(n.Server) {
+		// Only a literal address of a dead family is held back. A hostname stays
+		// whatever is down: it may resolve to the family that still works, and
+		// discarding it would be the very mistake this guard exists to prevent.
+		if (!e.V6 && isIPv6Endpoint(n.Server)) || (!e.V4 && isIPv4Endpoint(n.Server)) {
 			skipped++
 			continue
 		}
@@ -112,6 +139,7 @@ func logEgress(e egressState, total, kept, skipped int) {
 		log.Printf("[egress-guard] IPv6 unreachable: checking %d/%d nodes, held back %d IPv6 nodes (their state is left untouched)",
 			kept, total, skipped)
 	case !e.V4:
-		log.Printf("[egress-guard] IPv4 unreachable: IPv4 nodes will be reported as failed by the checks below; IPv6 still reachable")
+		log.Printf("[egress-guard] IPv4 unreachable: checking %d/%d nodes, held back %d IPv4 nodes (their state is left untouched)",
+			kept, total, skipped)
 	}
 }
