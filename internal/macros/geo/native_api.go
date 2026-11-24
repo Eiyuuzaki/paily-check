@@ -25,7 +25,25 @@ type GeoNativeAPIConfig struct {
 type NativeGeoEvidence struct {
 	Info     *interfaces.GeoInfo
 	Provider string
+	// Votes is how many providers independently agreed on Info.CountryCode, and
+	// AgreedWith names them. Exposed so a single-source answer is visible as such
+	// instead of looking as certain as a unanimous one.
+	Votes      int
+	AgreedWith []string
 }
+
+// nativeGeoQuorum is how many independent providers must agree before their
+// country is accepted without waiting for the rest.
+//
+// Racing for the first answer let network timing decide the region: whichever
+// provider replied fastest won, and the fastest one here is cloudflare-trace,
+// whose loc comes from Cloudflare's own IP database — the source this project
+// has repeatedly measured as wrong for Cloudflare ranges (2026-11-11: a US
+// egress labelled DE; 2026-11-24: 2605:52c0:: labelled LAX/US while sitting
+// outside the official anycast list). Agreement between two sources is much
+// harder to produce by accident than one source being fast, so requiring two
+// suppresses a single bad database without discarding it when it is right.
+const nativeGeoQuorum = 2
 
 type nativeGeoProvider struct {
 	name    string
@@ -52,7 +70,10 @@ func RunNativeGeoEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoNativ
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	resultCh := make(chan NativeGeoEvidence, 1)
+	// Every provider gets to answer: the decision is made from the whole set of
+	// replies, not from whichever arrived first. The channel is never closed, so
+	// late replies after an early return are dropped rather than panicking.
+	resultCh := make(chan NativeGeoEvidence, len(providers))
 	var wg sync.WaitGroup
 
 	for i := range providers {
@@ -65,12 +86,7 @@ func RunNativeGeoEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoNativ
 			if err != nil || info == nil || !isValidCountryCode(info.CountryCode) {
 				return
 			}
-
-			select {
-			case resultCh <- NativeGeoEvidence{Info: info, Provider: provider.name}:
-				cancel()
-			default:
-			}
+			resultCh <- NativeGeoEvidence{Info: info, Provider: provider.name}
 		}()
 	}
 
@@ -80,24 +96,98 @@ func RunNativeGeoEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoNativ
 		close(done)
 	}()
 
-	select {
-	case info := <-resultCh:
-		return info
-	case <-done:
+	quorum := nativeGeoQuorum
+	if quorum > len(providers) {
+		quorum = len(providers)
+	}
+
+	tally := newNativeGeoTally(quorum)
+	for {
 		select {
-		case info := <-resultCh:
-			return info
-		default:
-			return NativeGeoEvidence{}
-		}
-	case <-ctx.Done():
-		select {
-		case info := <-resultCh:
-			return info
-		default:
-			return NativeGeoEvidence{}
+		case ev := <-resultCh:
+			if opinion, ok := tally.record(ev); ok {
+				return opinion
+			}
+		case <-done:
+			return tally.finish(resultCh)
+		case <-ctx.Done():
+			return tally.finish(resultCh)
 		}
 	}
+}
+
+// nativeGeoTally counts how many providers named each country and decides when
+// the answer is settled. Split out from the request plumbing so the decision can
+// be tested without a network.
+type nativeGeoTally struct {
+	quorum    int
+	votes     map[string]int
+	agreed    map[string][]string
+	first     map[string]NativeGeoEvidence
+	best      NativeGeoEvidence
+	bestVotes int
+}
+
+func newNativeGeoTally(quorum int) *nativeGeoTally {
+	if quorum < 1 {
+		quorum = 1
+	}
+	return &nativeGeoTally{
+		quorum: quorum,
+		votes:  make(map[string]int),
+		agreed: make(map[string][]string),
+		first:  make(map[string]NativeGeoEvidence),
+	}
+}
+
+// record files one reply. The second result reports that quorum was met, in
+// which case it carries the settled opinion and the caller can stop waiting.
+func (t *nativeGeoTally) record(ev NativeGeoEvidence) (NativeGeoEvidence, bool) {
+	if ev.Info == nil {
+		return NativeGeoEvidence{}, false
+	}
+	code := strings.ToUpper(ev.Info.CountryCode)
+	t.votes[code]++
+	t.agreed[code] = append(t.agreed[code], ev.Provider)
+	if _, ok := t.first[code]; !ok {
+		t.first[code] = ev
+	}
+	if t.votes[code] > t.bestVotes {
+		t.bestVotes = t.votes[code]
+		t.best = t.first[code]
+	}
+	if t.votes[code] < t.quorum {
+		return NativeGeoEvidence{}, false
+	}
+	return t.opinion(code), true
+}
+
+// finish consumes whatever is already buffered, then returns the best tally.
+//
+// Quorum is not required: a single reply is still evidence, and returning
+// nothing would drop the node from distribution entirely (an empty region is
+// discarded downstream), which is the harsher of the two mistakes.
+func (t *nativeGeoTally) finish(resultCh <-chan NativeGeoEvidence) NativeGeoEvidence {
+	for {
+		select {
+		case ev := <-resultCh:
+			if opinion, ok := t.record(ev); ok {
+				return opinion
+			}
+		default:
+			if t.bestVotes == 0 {
+				return NativeGeoEvidence{}
+			}
+			return t.opinion(strings.ToUpper(t.best.Info.CountryCode))
+		}
+	}
+}
+
+func (t *nativeGeoTally) opinion(code string) NativeGeoEvidence {
+	ev := t.first[code]
+	ev.Votes = t.votes[code]
+	ev.AgreedWith = append([]string(nil), t.agreed[code]...)
+	return ev
 }
 
 func buildNativeGeoProviders(names []string) []nativeGeoProvider {
