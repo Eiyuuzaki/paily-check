@@ -51,7 +51,12 @@ var (
 	mmdbCache   = map[string]*maxminddb.Reader{}
 )
 
-func openDB(path string) (*maxminddb.Reader, error) {
+// openDBLocked requires mmdbCacheMu to be held; the Locked suffix follows the
+// convention already used by invalidateMMDBLocked in this file. RunMMDBCheck
+// holds that mutex across the lookup itself, not just across the map access:
+// InvalidateMMDB closes the reader, which unmaps the file, so a lookup running
+// outside the lock could read unmapped memory.
+func openDBLocked(path string) (*maxminddb.Reader, error) {
 	if db, ok := mmdbCache[path]; ok {
 		return db, nil
 	}
@@ -61,15 +66,6 @@ func openDB(path string) (*maxminddb.Reader, error) {
 	}
 	mmdbCache[path] = db
 	return db, nil
-}
-
-// InvalidateMMDB closes and removes the cached MMDB reader for path so future
-// lookups open the current file contents.
-func InvalidateMMDB(path string) {
-	mmdbCacheMu.Lock()
-	defer mmdbCacheMu.Unlock()
-
-	invalidateMMDBLocked(path)
 }
 
 func invalidateMMDBLocked(path string) {
@@ -101,7 +97,7 @@ func RunMMDBCheck(mmdbPath, rawIp string) *interfaces.GeoInfo {
 	mmdbCacheMu.Lock()
 	defer mmdbCacheMu.Unlock()
 
-	db, err := openDB(mmdbPath)
+	db, err := openDBLocked(mmdbPath)
 	if err != nil {
 		return nil
 	}

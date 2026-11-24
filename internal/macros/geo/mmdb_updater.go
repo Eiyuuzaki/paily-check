@@ -9,11 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/oschwald/maxminddb-golang"
 )
 
 const (
 	DefaultMMDBUpdateURL      = "https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/Country-without-asn.mmdb"
 	DefaultMMDBUpdateInterval = 12 * time.Hour
+
+	// maxMMDBBytes bounds the download. The published file is tens of megabytes;
+	// without a cap a broken CDN response could fill the disk before the client
+	// timeout expired, and this runs unattended on a NAS.
+	maxMMDBBytes = 256 << 20
 )
 
 // MMDBUpdater refreshes a local MMDB file on a fixed interval.
@@ -107,9 +114,14 @@ func (u *MMDBUpdater) Update(ctx context.Context) error {
 		}
 	}()
 
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	n, err := io.Copy(tmp, io.LimitReader(resp.Body, maxMMDBBytes+1))
+	if err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("write temp file: %w", err)
+	}
+	if n > maxMMDBBytes {
+		_ = tmp.Close()
+		return fmt.Errorf("mmdb download exceeds %d bytes", maxMMDBBytes)
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
@@ -118,6 +130,17 @@ func (u *MMDBUpdater) Update(ctx context.Context) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
+
+	// Verify the bytes really are an MMDB before swapping them in. A CDN that
+	// answers with an HTML error page under a 200 status would otherwise replace
+	// a working database with garbage: every lookup would then return nil and
+	// region detection would fall back for the whole fleet, with the only clue
+	// being a log line saying the update succeeded.
+	probe, err := maxminddb.Open(tmpPath)
+	if err != nil {
+		return fmt.Errorf("downloaded file is not a valid mmdb: %w", err)
+	}
+	_ = probe.Close()
 
 	if err := replaceCachedMMDBFile(tmpPath, u.path); err != nil {
 		return fmt.Errorf("replace mmdb file: %w", err)
