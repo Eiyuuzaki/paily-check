@@ -52,10 +52,6 @@ type nativeGeoProvider struct {
 	headers map[string]string
 }
 
-func RunNativeGeoCheck(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAPIConfig) *interfaces.GeoInfo {
-	return RunNativeGeoEvidence(ctx, v, cfg).Info
-}
-
 func RunNativeGeoEvidence(ctx context.Context, v interfaces.Vendor, cfg GeoNativeAPIConfig) NativeGeoEvidence {
 	providers := buildNativeGeoProviders(cfg.Providers)
 	if len(providers) == 0 {
@@ -441,7 +437,11 @@ func parseIPInfo(body []byte) (*interfaces.GeoInfo, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err
 	}
-	info := &interfaces.GeoInfo{IP: payload.IP, CountryCode: strings.ToUpper(payload.Country), Country: payload.Region, Org: payload.Org, TimeZone: payload.Timezone}
+	// ipinfo returns the ISO code in "country" and the region name in "region";
+	// it provides no country name. Country used to be filled from Region, which
+	// put "California" in a field documented as the country name - harmless only
+	// because nothing reads it, and a trap the moment something does.
+	info := &interfaces.GeoInfo{IP: payload.IP, CountryCode: strings.ToUpper(payload.Country), Org: payload.Org, TimeZone: payload.Timezone}
 	if payload.Loc != "" {
 		parts := strings.Split(payload.Loc, ",")
 		if len(parts) == 2 {
@@ -477,10 +477,15 @@ func stringValue(m map[string]any, key string) string {
 	return str
 }
 
+// firstNonEmpty returns the first value with non-space content, trimmed.
+// Returning it untrimmed would let " US " reach isValidCountryCode, which
+// rejects anything that is not exactly two letters - so a padded answer would
+// be discarded instead of used.
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
 		}
 	}
 	return ""
