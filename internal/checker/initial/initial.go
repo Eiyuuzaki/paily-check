@@ -4,6 +4,7 @@ package initial
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"github.com/openpaily/paily-check/internal/checker/probeurl"
@@ -47,6 +48,22 @@ func RunAll(ctx context.Context, nodes []client.Node, vendorBase interfaces.Vend
 
 			sem <- struct{}{}
 			defer func() { <-sem }()
+
+			// An unrecovered panic in any goroutine terminates the whole program,
+			// and Build parses a raw map that came from an external source. This
+			// node is recorded as dead rather than omitted: unlike a node the round
+			// never reached, this one was reached and its configuration broke the
+			// parser, so it cannot be dialled either. The distinct reason keeps it
+			// diagnosable instead of looking like an ordinary timeout.
+			defer func() {
+				if p := recover(); p != nil {
+					log.Printf("[initial] node %s panicked and is reported dead: %v", node.ID, p)
+					results[i] = client.CheckResult{
+						NodeID:  node.ID,
+						Initial: client.InitialResult{LatencyMS: -1, FailReason: "panic"},
+					}
+				}
+			}()
 
 			v := vendorBase.Build(node.DialRaw())
 			pr := pingMacro.Ping(ctx, v, pingMacro.PingConfig{

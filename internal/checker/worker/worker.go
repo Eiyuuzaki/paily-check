@@ -6,6 +6,7 @@ package worker
 
 import (
 	"context"
+	"log"
 	"sync"
 
 	"golang.org/x/sync/semaphore"
@@ -19,6 +20,13 @@ import (
 //
 // Nodes whose semaphore.Acquire is interrupted by ctx cancellation are
 // silently skipped (not present in the returned map).
+//
+// A node whose fn panics is also left out of the map rather than taking the
+// process down: fn builds a mihomo proxy from a raw map that came from an
+// external source, and an unrecovered panic in any goroutine terminates the
+// whole program, so one malformed node would discard a round that had already
+// spent real Cloudflare quota. Leaving the node out is the same outcome as a
+// cancelled acquire - core sees no result and does not change its state.
 //
 // concurrency ≤ 0 is clamped to 1.
 func RunNodes[R any](
@@ -46,7 +54,10 @@ func RunNodes[R any](
 			}
 			defer sem.Release(1)
 
-			r := fn(ctx, node)
+			r, ok := runNode(ctx, node, fn)
+			if !ok {
+				return
+			}
 
 			mu.Lock()
 			results[node.ID] = r
@@ -56,4 +67,16 @@ func RunNodes[R any](
 
 	wg.Wait()
 	return results
+}
+
+// runNode calls fn, reporting false when it panicked so the caller can leave the
+// node out of the result map instead of crashing.
+func runNode[R any](ctx context.Context, node client.Node, fn func(context.Context, client.Node) R) (r R, ok bool) {
+	defer func() {
+		if p := recover(); p != nil {
+			log.Printf("[worker] node %s panicked and was skipped: %v", node.ID, p)
+			ok = false
+		}
+	}()
+	return fn(ctx, node), true
 }
