@@ -43,7 +43,9 @@ var nativeHandlers = map[string]NativeHandler{}
 // warnNativeOnce keeps the empty-registry warning to one line per process.
 // RunAllWithEngine is called once per node, so an unwarned variant would emit
 // one line per node per round.
-var warnNativeOnce sync.Once
+// Pointer so tests can swap it without copying a sync.Once, which contains
+// noCopy and would trip go vet's copylocks check.
+var warnNativeOnce = new(sync.Once)
 
 // warnNativeWithoutHandlers reports an engine mode that cannot do any work.
 //

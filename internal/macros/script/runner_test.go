@@ -30,7 +30,7 @@ func TestWarnNativeWithoutHandlers(t *testing.T) {
 	defer func() { nativeHandlers = saved; warnNativeOnce = savedOnce }()
 	nativeHandlers = map[string]NativeHandler{}
 
-	warnNativeOnce = sync.Once{}
+	warnNativeOnce = new(sync.Once)
 	out := captureLog(func() { warnNativeWithoutHandlers(EngineNative) })
 	if !strings.Contains(out, "engine=native but no native handler is registered") {
 		t.Fatalf("native mode must warn about the empty registry, got %q", out)
@@ -38,7 +38,7 @@ func TestWarnNativeWithoutHandlers(t *testing.T) {
 
 	// Second call and every subsequent one must stay silent: the pipeline calls
 	// this once per node.
-	warnNativeOnce = sync.Once{}
+	warnNativeOnce = new(sync.Once)
 	out = captureLog(func() {
 		warnNativeWithoutHandlers(EngineNative)
 		warnNativeWithoutHandlers(EngineNative)
@@ -54,7 +54,7 @@ func TestWarnNativeAutoIsSofterNote(t *testing.T) {
 	savedOnce := warnNativeOnce
 	defer func() { nativeHandlers = saved; warnNativeOnce = savedOnce }()
 	nativeHandlers = map[string]NativeHandler{}
-	warnNativeOnce = sync.Once{}
+	warnNativeOnce = new(sync.Once)
 
 	out := captureLog(func() { warnNativeWithoutHandlers(EngineAuto) })
 	if !strings.Contains(out, "falls back to goja") {
@@ -72,13 +72,13 @@ func TestWarnNativeSilentWhenUsable(t *testing.T) {
 	defer func() { nativeHandlers = saved; warnNativeOnce = savedOnce }()
 
 	nativeHandlers = map[string]NativeHandler{"x": func(context.Context, interfaces.Vendor, int) (bool, error) { return true, nil }}
-	warnNativeOnce = sync.Once{}
+	warnNativeOnce = new(sync.Once)
 	if out := captureLog(func() { warnNativeWithoutHandlers(EngineNative) }); out != "" {
 		t.Fatalf("a registered handler must not warn, got %q", out)
 	}
 
 	nativeHandlers = map[string]NativeHandler{}
-	warnNativeOnce = sync.Once{}
+	warnNativeOnce = new(sync.Once)
 	if out := captureLog(func() { warnNativeWithoutHandlers(EngineGoja) }); out != "" {
 		t.Fatalf("goja mode must not warn, got %q", out)
 	}

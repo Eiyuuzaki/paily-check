@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -13,6 +14,26 @@ import (
 
 	"github.com/openpaily/paily-check/internal/interfaces"
 )
+
+// maxResponseBody bounds how much of a proxied response is held in memory.
+//
+// Without a bound the only limit was the deadline, so a target that keeps
+// sending could stream gigabytes into RAM within one timeout window and get the
+// process OOM-killed - the checker runs on a NAS with a fixed memory budget.
+const maxResponseBody = 16 << 20
+
+// readAllLimited reads at most maxResponseBody and treats overflow as an error
+// rather than returning a silently truncated body.
+func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
+	b, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > limit {
+		return nil, fmt.Errorf("response body exceeds %d bytes", limit)
+	}
+	return b, nil
+}
 
 // clampRetry ensures 1 ≤ retry ≤ 10.
 func clampRetry(n int) int {
@@ -112,7 +133,7 @@ func WithRetry(p interfaces.Vendor, retry int, timeoutMS int64, opt *interfaces.
 		}
 		// Read body BEFORE cancelling the context; cancelling early closes the
 		// underlying connection and makes io.ReadAll return an empty body.
-		b, rerr := io.ReadAll(r.Body)
+		b, rerr := readAllLimited(r.Body, maxResponseBody)
 		r.Body.Close()
 		cancel()
 		if rerr != nil {
@@ -125,9 +146,14 @@ func WithRetry(p interfaces.Vendor, retry int, timeoutMS int64, opt *interfaces.
 	return body, resp, redirects
 }
 
-// NetCat sends data to addr over the given network through p, optionally
-// reading only a single line in return. Returns the raw response bytes.
-func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, readLine bool, network interfaces.RequestOptionsNetwork) ([]byte, error) {
+// NetCat sends data to addr over the given network through p and returns the
+// raw response bytes.
+//
+// firstChunk returns after one Read instead of reading to EOF. It does NOT
+// return a complete line: a single Read yields whatever has arrived, which may
+// be half a line or several. Callers that need a full line must parse the
+// result themselves.
+func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, firstChunk bool, network interfaces.RequestOptionsNetwork) ([]byte, error) {
 	var (
 		conn net.Conn
 		err  error
@@ -159,7 +185,7 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 		return nil, err
 	}
 
-	if readLine {
+	if firstChunk {
 		buf := make([]byte, 4096)
 		n, err := conn.Read(buf)
 		if err != nil && err != io.EOF {
@@ -169,21 +195,25 @@ func NetCat(ctx context.Context, p interfaces.Vendor, addr string, data []byte, 
 	}
 
 	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, conn); err != nil {
+	n, err := io.Copy(&buf, io.LimitReader(conn, maxResponseBody+1))
+	if err != nil {
 		return nil, err
+	}
+	if n > maxResponseBody {
+		return nil, fmt.Errorf("socket response exceeds %d bytes", maxResponseBody)
 	}
 	return buf.Bytes(), nil
 }
 
 // NetCatWithRetry retries NetCat up to retry times.
-func NetCatWithRetry(p interfaces.Vendor, retry int, timeoutMS int64, addr string, data []byte, readLine bool, network interfaces.RequestOptionsNetwork) ([]byte, error) {
+func NetCatWithRetry(p interfaces.Vendor, retry int, timeoutMS int64, addr string, data []byte, firstChunk bool, network interfaces.RequestOptionsNetwork) ([]byte, error) {
 	var (
 		out []byte
 		err error
 	)
 	for i := 0; i < clampRetry(retry); i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
-		out, err = NetCat(ctx, p, addr, data, readLine, network)
+		out, err = NetCat(ctx, p, addr, data, firstChunk, network)
 		cancel()
 		if err == nil {
 			return out, nil
