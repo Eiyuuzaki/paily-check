@@ -4,9 +4,8 @@ import "sync/atomic"
 
 // dials counts outbound dial attempts made through this package.
 //
-// Every probe the pipeline performs ends in ClashVendor.DialTCP or DialUDP, so
-// this single counter is the cheapest honest measure of what a check actually
-// costs. It exists to answer one question with numbers instead of estimates:
+// Every probe the pipeline performs ends in ClashVendor.DialTCP, so this single
+// counter is the cheapest honest measure of what a check actually costs. It exists to answer one question with numbers instead of estimates:
 // a round is believed to cost ~25 requests per node, and that budget decides the
 // Cloudflare quota, the round duration and how much idle window the on-demand
 // check has left. Counting at the dial boundary avoids instrumenting every

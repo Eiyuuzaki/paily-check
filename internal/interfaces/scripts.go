@@ -5,7 +5,6 @@ type ScriptType string
 
 const (
 	STypeMedia ScriptType = "media"
-	STypeIP    ScriptType = "ip"
 )
 
 // Script holds a single JS script to execute via the goja engine.
