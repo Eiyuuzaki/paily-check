@@ -199,8 +199,20 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnv(cfg)
+	warnMissingSecret(cfg)
 	warnUnreachableRescue(cfg)
 	return cfg, nil
+}
+
+// warnMissingSecret reports the one setting without which nothing works: every
+// call to paily-core carries this as a Bearer token, so an empty value means the
+// process starts, schedules rounds, and has every request rejected. Failing at
+// startup would point at the cause immediately; a warning is the compromise,
+// since a local run against a token-less core is legitimate.
+func warnMissingSecret(cfg *Config) {
+	if strings.TrimSpace(cfg.Core.Secret) == "" {
+		log.Printf("[config] warning: no service secret configured (PAILY_SERVICE_SECRET); paily-core will reject every request with 401")
+	}
 }
 
 // warnUnreachableRescue reports a configuration in which the slow-node rescue
@@ -292,22 +304,38 @@ func envStr(key string, dst *string) {
 	}
 }
 
+// envInt, envBool and envCSV report a value they could not understand instead
+// of leaving the previous one in place without a word. An override that silently
+// does not apply is the same trap this project already hit with a name template
+// that existed in the database and quietly overrode the code: the operator
+// believes the setting took effect, and nothing in the output says otherwise.
 func envInt(key string, dst *int) {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			*dst = n
-		}
+	v := os.Getenv(key)
+	if v == "" {
+		return
 	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		log.Printf("[config] warning: %s=%q is not an integer; keeping %d", key, v, *dst)
+		return
+	}
+	*dst = n
 }
 
 func envBool(key string, dst *bool) {
-	if v := os.Getenv(key); v != "" {
-		switch v {
-		case "true", "1", "yes":
-			*dst = true
-		case "false", "0", "no":
-			*dst = false
-		}
+	v := os.Getenv(key)
+	if v == "" {
+		return
+	}
+	// Case-insensitive: SPEED_ENABLED=True used to be ignored outright, which is
+	// an easy thing to write and impossible to notice.
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "1", "yes":
+		*dst = true
+	case "false", "0", "no":
+		*dst = false
+	default:
+		log.Printf("[config] warning: %s=%q is not a boolean; keeping %t", key, v, *dst)
 	}
 }
 

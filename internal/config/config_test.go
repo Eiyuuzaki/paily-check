@@ -7,6 +7,16 @@ import (
 	"testing"
 )
 
+// captureLog runs fn with the standard logger redirected and returns its output.
+func captureLog(fn func()) string {
+	var buf bytes.Buffer
+	prev := log.Writer()
+	log.SetOutput(&buf)
+	defer log.SetOutput(prev)
+	fn()
+	return buf.String()
+}
+
 // The rescue in initial.RunAll only helps a node whose true latency falls
 // between the ping timeout and the alive threshold. When the threshold is not
 // above the timeout that range is empty, and the configuration silently loses a
