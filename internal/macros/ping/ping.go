@@ -83,7 +83,13 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 	}
 
 	samples := make([]int, n) // filled with T or actual rtt
-	successCount := 0
+	// ok mirrors samples: a failure is recorded as the timeout value, so the
+	// sample alone cannot say whether the attempt succeeded. Inferring it from
+	// "latency < timeout" breaks on an attempt that answers exactly at the
+	// budget, which would be counted as a success in Success and dropped from
+	// AvgSuccessMS.
+	ok := make([]bool, n)
+	okCount := 0
 	lastFailReason := ""
 	observedURL := ""
 
@@ -113,7 +119,8 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 			lastFailReason = classifyPingError(err)
 		} else {
 			samples[i] = int(httpDelay)
-			successCount++
+			ok[i] = true
+			okCount++
 			if observedURL == "" {
 				observedURL = target
 			}
@@ -123,13 +130,13 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 		if cfg.SampleGapMS > 0 && i < n-1 {
 			select {
 			case <-ctx.Done():
-				return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: "aborted", Success: successCount, Total: n}
+				return PingResult{LatencyMS: -1, JitterMS: -1, FailReason: "aborted", Success: okCount, Total: n}
 			case <-time.After(time.Duration(cfg.SampleGapMS) * time.Millisecond):
 			}
 		}
 	}
 
-	if successCount == 0 {
+	if okCount == 0 {
 		if lastFailReason == "" {
 			lastFailReason = "timeout"
 		}
@@ -175,16 +182,16 @@ func Ping(ctx context.Context, v interfaces.Vendor, cfg PingConfig) PingResult {
 
 	// Mean over successful samples only (raw live-path latency, no timeout penalty).
 	sumOK := 0
-	for _, s := range samples {
-		if s < t {
+	for i, s := range samples {
+		if ok[i] {
 			sumOK += s
 		}
 	}
 	avgOK := 0
-	if successCount > 0 {
-		avgOK = sumOK / successCount
+	if okCount > 0 {
+		avgOK = sumOK / okCount
 	}
-	return PingResult{LatencyMS: avg, JitterMS: jitter, Success: successCount, Total: n, AvgSuccessMS: avgOK, ObservedURL: observedURL}
+	return PingResult{LatencyMS: avg, JitterMS: jitter, Success: okCount, Total: n, AvgSuccessMS: avgOK, ObservedURL: observedURL}
 }
 
 // ---------------------------------------------------------------------------

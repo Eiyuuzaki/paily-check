@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -198,7 +199,27 @@ func Load(path string) (*Config, error) {
 	}
 
 	applyEnv(cfg)
+	warnUnreachableRescue(cfg)
 	return cfg, nil
+}
+
+// warnUnreachableRescue reports a configuration in which the slow-node rescue
+// can never fire.
+//
+// initial.RunAll gives a node whose every sample timed out one more attempt with
+// a doubled budget, so a slow host is not classified dead by a hiccup. The
+// result is compared against Initial.AliveThresholdMS like any other latency, so
+// the rescue only helps a node whose true latency L satisfies
+// PingTimeoutMS < L <= AliveThresholdMS. When the threshold is not above the
+// timeout that range is empty and the rescue is dead code: with the shipped
+// defaults (both 3000ms) it can never report anything the normal path would not
+// have. Silent, because a wrong threshold changes no output — it only removes a
+// safety net.
+func warnUnreachableRescue(cfg *Config) {
+	if cfg.Initial.AliveThresholdMS <= cfg.Initial.PingTimeoutMS {
+		log.Printf("[config] warning: initial.alive_threshold_ms (%d) is not above initial.ping_timeout_ms (%d); the slow-node rescue cannot fire",
+			cfg.Initial.AliveThresholdMS, cfg.Initial.PingTimeoutMS)
+	}
 }
 
 // ---------------------------------------------------------------------------
