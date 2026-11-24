@@ -35,6 +35,21 @@ func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
 	return b, nil
 }
 
+// defaultAttemptTimeoutMS is used when a caller supplies a non-positive
+// timeout. Scripts reach these functions with a value straight from JS, so a
+// typo like `timeout: 0` would otherwise create an already-expired context and
+// make every request fail instantly with "context deadline exceeded" - a
+// message that points at the network instead of at the option.
+const defaultAttemptTimeoutMS = 3000
+
+// clampTimeoutMS turns a caller-supplied timeout into a usable duration.
+func clampTimeoutMS(ms int64) time.Duration {
+	if ms <= 0 {
+		ms = defaultAttemptTimeoutMS
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // clampRetry ensures 1 ≤ retry ≤ 10.
 func clampRetry(n int) int {
 	if n < 1 {
@@ -125,7 +140,7 @@ func WithRetry(p interfaces.Vendor, retry int, timeoutMS int64, opt *interfaces.
 		redirects []string
 	)
 	for i := 0; i < clampRetry(retry) && resp == nil; i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), clampTimeoutMS(timeoutMS))
 		r, redir, err := Unsafe(ctx, p, opt)
 		if err != nil {
 			cancel()
@@ -212,7 +227,7 @@ func NetCatWithRetry(p interfaces.Vendor, retry int, timeoutMS int64, addr strin
 		err error
 	)
 	for i := 0; i < clampRetry(retry); i++ {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMS)*time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), clampTimeoutMS(timeoutMS))
 		out, err = NetCat(ctx, p, addr, data, firstChunk, network)
 		cancel()
 		if err == nil {
